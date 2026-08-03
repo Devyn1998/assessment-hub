@@ -1,0 +1,16 @@
+{
+  "name": "hud-assessment-app",
+  "version": "1.0.0",
+  "description": "Remote HUD assessment tool: two-way live video between operator and homeowner, plus AR/manual wall-to-wall measurement.",
+  "main": "server.js",
+  "engines": {
+    "node": ">=18"
+  },
+  "scripts": {
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "express": "^4.19.2",
+    "ws": "^8.17.0"
+  }
+}

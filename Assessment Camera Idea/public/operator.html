@@ -1,0 +1,213 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Assessment HUD — Operator</title>
+<script src="/rtc-config.js"></script>
+<style>
+  :root { color-scheme: dark; }
+  * { box-sizing: border-box; }
+  body { margin:0; background:#0b0c0f; color:#eee; font-family:-apple-system,system-ui,Segoe UI,Roboto,sans-serif; }
+  header { padding:14px 20px; border-bottom:1px solid #222; display:flex; align-items:center; gap:16px; flex-wrap:wrap; }
+  header h1 { font-size:16px; margin:0; font-weight:700; }
+  #layout { display:grid; grid-template-columns: 1fr 340px; gap:16px; padding:16px; max-width:1400px; margin:0 auto; }
+  @media (max-width: 900px) { #layout { grid-template-columns: 1fr; } }
+  .panel { background:#15171b; border:1px solid #222; border-radius:12px; padding:14px; }
+  #videoWrap { position:relative; width:100%; aspect-ratio:16/9; background:#000; border-radius:10px; overflow:hidden; }
+  #remoteVideo { width:100%; height:100%; object-fit:contain; background:#000; }
+  #selfBox { position:absolute; bottom:12px; right:12px; width:130px; height:96px; border-radius:8px; overflow:hidden; border:2px solid rgba(255,255,255,.7); background:#111; }
+  #selfBox video { width:100%; height:100%; object-fit:cover; }
+  #linkRow { display:flex; gap:8px; align-items:center; }
+  #linkRow input { flex:1; padding:10px; border-radius:8px; border:1px solid #333; background:#0d0e11; color:#eee; font-size:13px; }
+  button { border:0; border-radius:8px; padding:10px 14px; font-size:13px; font-weight:600; background:#1e6fe0; color:#fff; cursor:pointer; }
+  button.secondary { background:#2a2d34; color:#ddd; }
+  button:disabled { opacity:.4; cursor:default; }
+  #status { display:flex; align-items:center; gap:6px; font-size:12px; color:#aaa; }
+  .dot { width:8px; height:8px; border-radius:50%; background:#e33; }
+  .dot.live { background:#3ecf5f; }
+  h2 { font-size:13px; text-transform:uppercase; letter-spacing:.06em; color:#999; margin:0 0 10px; }
+  #log { display:flex; flex-direction:column; gap:10px; max-height:70vh; overflow:auto; }
+  .measure-card { background:#0d0e11; border:1px solid #262a31; border-radius:10px; padding:10px; }
+  .measure-card .mode { font-size:11px; color:#8ab4ff; text-transform:uppercase; letter-spacing:.05em; }
+  .measure-card .val { font-size:22px; font-weight:700; margin:2px 0; }
+  .measure-card .sub { font-size:11px; color:#888; }
+  .measure-card img { width:100%; border-radius:6px; margin-top:8px; display:block; }
+  #empty { color:#666; font-size:13px; text-align:center; padding:20px 0; }
+  code { background:#0d0e11; padding:2px 6px; border-radius:4px; }
+</style>
+</head>
+<body>
+<header>
+  <h1>Assessment HUD</h1>
+  <div id="status"><span class="dot" id="dot"></span><span id="statusText">Starting…</span></div>
+</header>
+
+<div id="layout">
+  <div>
+    <div class="panel">
+      <h2>Homeowner link</h2>
+      <div id="linkRow">
+        <input id="linkInput" readonly value="Generating…" />
+        <button id="copyBtn">Copy</button>
+        <button id="newBtn" class="secondary">New Session</button>
+      </div>
+    </div>
+    <div class="panel" style="margin-top:16px;">
+      <h2>Homeowner camera</h2>
+      <div id="videoWrap">
+        <video id="remoteVideo" autoplay playsinline></video>
+        <div id="selfBox"><video id="selfVideo" autoplay playsinline muted></video></div>
+      </div>
+      <div style="margin-top:10px; display:flex; gap:8px;">
+        <button id="camBtn" class="secondary">Enable My Camera/Mic</button>
+        <button id="muteBtn" class="secondary" disabled>Mute Mic</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="panel">
+    <h2>Measurements</h2>
+    <div id="log"><div id="empty">No measurements yet. Ask the homeowner to tap "Start AR Measure" or "Measure on Photo" once you're both connected.</div></div>
+  </div>
+</div>
+
+<script>
+const $ = (id) => document.getElementById(id);
+const linkInput = $('linkInput');
+const statusText = $('statusText');
+const dot = $('dot');
+const remoteVideo = $('remoteVideo');
+const selfVideo = $('selfVideo');
+const log = $('log');
+const empty = $('empty');
+
+let ws, pc, roomId, localStream = null;
+
+function setStatus(text, live) {
+  statusText.textContent = text;
+  dot.classList.toggle('live', !!live);
+}
+
+async function newSession() {
+  const res = await fetch('/api/new-room');
+  const data = await res.json();
+  roomId = data.roomId;
+  const link = `${location.origin}/join/${roomId}`;
+  linkInput.value = link;
+  connectWS();
+}
+
+function connectWS() {
+  if (ws) ws.close();
+  if (pc) { pc.close(); pc = null; }
+  remoteVideo.srcObject = null;
+  const wsProto = location.protocol === 'https:' ? 'wss' : 'ws';
+  ws = new WebSocket(`${wsProto}://${location.host}`);
+
+  ws.addEventListener('open', () => {
+    ws.send(JSON.stringify({ type: 'join', roomId, role: 'operator' }));
+    setStatus('Waiting for homeowner to open the link…', false);
+  });
+
+  ws.addEventListener('message', async (ev) => {
+    const msg = JSON.parse(ev.data);
+    if (msg.type === 'peer-joined' && msg.role === 'homeowner') {
+      setStatus('Homeowner connected — negotiating video…', false);
+      await ensurePC();
+      const offer = await pc.createOffer();
+      await pc.setLocalDescription(offer);
+      ws.send(JSON.stringify({ type: 'offer', sdp: pc.localDescription }));
+    } else if (msg.type === 'peer-left' && msg.role === 'homeowner') {
+      setStatus('Homeowner disconnected', false);
+      remoteVideo.srcObject = null;
+    } else if (msg.type === 'answer') {
+      if (pc) await pc.setRemoteDescription(new RTCSessionDescription(msg.sdp));
+    } else if (msg.type === 'ice-candidate') {
+      if (pc && msg.candidate) {
+        try { await pc.addIceCandidate(msg.candidate); } catch (e) { console.warn(e); }
+      }
+    } else if (msg.type === 'measurement') {
+      addMeasurement(msg);
+    }
+  });
+}
+
+async function ensurePC() {
+  if (pc) return;
+  pc = new RTCPeerConnection({ iceServers: window.HUD_ICE_SERVERS });
+  if (localStream) localStream.getTracks().forEach((t) => pc.addTrack(t, localStream));
+  pc.onicecandidate = (e) => {
+    if (e.candidate) ws.send(JSON.stringify({ type: 'ice-candidate', candidate: e.candidate }));
+  };
+  pc.ontrack = (e) => {
+    remoteVideo.srcObject = e.streams[0];
+    setStatus('Live', true);
+  };
+  pc.onconnectionstatechange = () => {
+    if (pc.connectionState === 'connected') setStatus('Live', true);
+    if (['disconnected','failed','closed'].includes(pc.connectionState)) setStatus('Connection lost', false);
+  };
+}
+
+$('camBtn').addEventListener('click', async () => {
+  try {
+    localStream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
+    selfVideo.srcObject = localStream;
+    $('muteBtn').disabled = false;
+    $('camBtn').textContent = 'Camera On';
+    $('camBtn').disabled = true;
+    if (pc) {
+      const senders = pc.getSenders();
+      localStream.getTracks().forEach((track) => {
+        const sender = senders.find((s) => s.track && s.track.kind === track.kind);
+        if (sender) sender.replaceTrack(track); else pc.addTrack(track, localStream);
+      });
+    }
+  } catch (e) {
+    alert('Could not access camera/mic: ' + e.message);
+  }
+});
+
+let muted = false;
+$('muteBtn').addEventListener('click', () => {
+  muted = !muted;
+  if (localStream) localStream.getAudioTracks().forEach((t) => (t.enabled = !muted));
+  $('muteBtn').textContent = muted ? 'Unmute Mic' : 'Mute Mic';
+});
+
+$('copyBtn').addEventListener('click', () => {
+  linkInput.select();
+  navigator.clipboard?.writeText(linkInput.value);
+  $('copyBtn').textContent = 'Copied!';
+  setTimeout(() => ($('copyBtn').textContent = 'Copy'), 1500);
+});
+
+$('newBtn').addEventListener('click', () => {
+  log.innerHTML = '';
+  log.appendChild(empty);
+  newSession();
+});
+
+function addMeasurement(msg) {
+  empty.remove();
+  const card = document.createElement('div');
+  card.className = 'measure-card';
+  const modeLabel = msg.mode === 'ar' ? 'AR Measurement' : 'Photo Estimate';
+  card.innerHTML = `
+    <div class="mode">${modeLabel} · ${new Date().toLocaleTimeString()}</div>
+    <div class="val">${msg.label || ''}</div>
+    <div class="sub">${msg.distanceMeters ? msg.distanceMeters + ' m' : ''}</div>
+  `;
+  if (msg.thumb) {
+    const img = document.createElement('img');
+    img.src = msg.thumb;
+    card.appendChild(img);
+  }
+  log.prepend(card);
+}
+
+newSession();
+</script>
+</body>
+</html>
