@@ -209,6 +209,28 @@ async function ensurePC() {
     if (pc.connectionState === 'connected') setStatus('Live', true);
     if (['disconnected', 'failed', 'closed'].includes(pc.connectionState)) setStatus('Connection lost', false);
   };
+  // The camera permission prompt can take a few seconds for the person to
+  // tap "Allow" — often longer than it takes the operator's offer to
+  // arrive. When that happens, the initial answer goes out with no local
+  // track, and startCamera() below has to add the track *after* the
+  // connection is already established. Adding a track post-negotiation
+  // doesn't take effect on its own — it fires negotiationneeded, and this
+  // handler is what actually renegotiates so the operator ends up
+  // receiving the video.
+  let negotiating = false;
+  pc.onnegotiationneeded = async () => {
+    if (negotiating) return;
+    negotiating = true;
+    try {
+      const offer = await pc.createOffer();
+      await pc.setLocalDescription(offer);
+      ws.send(JSON.stringify({ type: 'offer', sdp: pc.localDescription }));
+    } catch (e) {
+      console.warn('renegotiation failed', e);
+    } finally {
+      negotiating = false;
+    }
+  };
 }
 
 async function startCamera(facing) {

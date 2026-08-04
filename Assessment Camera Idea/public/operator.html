@@ -123,6 +123,15 @@ function connectWS() {
       remoteVideo.srcObject = null;
     } else if (msg.type === 'answer') {
       if (pc) await pc.setRemoteDescription(new RTCSessionDescription(msg.sdp));
+    } else if (msg.type === 'offer') {
+      // The homeowner's camera permission prompt can resolve after the
+      // initial handshake completes, in which case their page renegotiates
+      // by sending us a fresh offer so their video actually gets through.
+      await ensurePC();
+      await pc.setRemoteDescription(new RTCSessionDescription(msg.sdp));
+      const answer = await pc.createAnswer();
+      await pc.setLocalDescription(answer);
+      ws.send(JSON.stringify({ type: 'answer', sdp: pc.localDescription }));
     } else if (msg.type === 'ice-candidate') {
       if (pc && msg.candidate) {
         try { await pc.addIceCandidate(msg.candidate); } catch (e) { console.warn(e); }
