@@ -88,6 +88,7 @@
     <div class="row" id="arRemoteRow" style="display:none; gap:8px; margin-bottom:14px;">
       <button id="dropPinBtn" disabled>Drop Pin</button>
       <button id="resetArBtn" class="secondary">Reset</button>
+      <button id="endArBtn" class="secondary">End AR</button>
     </div>
 
     <div class="row" style="gap:8px;">
@@ -117,7 +118,7 @@
 
   <div class="panel" style="margin-top:16px;">
     <h2>Measurements</h2>
-    <div id="log"><div id="empty">No measurements yet. Ask the homeowner to tap "Start AR Measure," or use the remote controls above.</div></div>
+    <div id="log"><div id="empty">No measurements yet. Have the homeowner tap "Enable AR" once (one-time local tap), then drive pins and photo capture from the controls above.</div></div>
   </div>
   </div>
 </div>
@@ -137,6 +138,7 @@ const arIndicatorText = $('arIndicatorText');
 const arRemoteRow = $('arRemoteRow');
 const dropPinBtn = $('dropPinBtn');
 const resetArBtn = $('resetArBtn');
+const endArBtn = $('endArBtn');
 const capturePhotoBtn = $('capturePhotoBtn');
 const photoWrap = $('photoWrap');
 const photoImg = $('photoImg');
@@ -328,6 +330,15 @@ dropPinBtn.addEventListener('click', () => {
 resetArBtn.addEventListener('click', () => {
   if (!ws) return;
   ws.send(JSON.stringify({ type: 'remote-reset-ar' }));
+  arStep = 0;
+  dropPinBtn.textContent = 'Drop Pin';
+});
+
+endArBtn.addEventListener('click', () => {
+  if (!ws) return;
+  ws.send(JSON.stringify({ type: 'remote-end-ar' }));
+  arIndicatorRow.style.display = 'none';
+  arRemoteRow.style.display = 'none';
   arStep = 0;
   dropPinBtn.textContent = 'Drop Pin';
 });

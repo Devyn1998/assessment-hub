@@ -11,7 +11,6 @@
   html, body { margin:0; padding:0; height:100%; background:#000; font-family: -apple-system, system-ui, Segoe UI, Roboto, sans-serif; overflow:hidden; }
   #stage { position:relative; width:100vw; height:100vh; height:100dvh; background:#000; }
   #localVideo { position:absolute; inset:0; width:100%; height:100%; object-fit:cover; background:#111; }
-  #overlay { position:absolute; inset:0; width:100%; height:100%; touch-action:none; }
   #remoteBox {
     position:absolute; top:14px; right:14px; width:110px; height:150px;
     border-radius:12px; overflow:hidden; border:2px solid rgba(255,255,255,.85);
@@ -50,7 +49,6 @@
     background:#1e6fe0; color:#fff; -webkit-tap-highlight-color:transparent;
   }
   button.secondary { background:#3a3a3a; }
-  button.danger { background:#c0392b; }
   button:disabled { opacity:.4; }
   #measureBanner {
     position:absolute; top:60px; left:14px; right:130px; z-index:20; color:#fff;
@@ -62,20 +60,12 @@
   }
   #resultCard .big { font-size:26px; font-weight:700; margin:4px 0; }
   #freezeCanvas { position:absolute; inset:0; width:100%; height:100%; object-fit:cover; display:none; z-index:5; background:#000; }
-  #calibForm {
-    position:absolute; left:14px; right:14px; bottom:100px; z-index:25; background:rgba(20,20,20,.92);
-    color:#fff; border-radius:12px; padding:14px; display:none;
-  }
-  #calibForm input { width:100%; padding:10px; border-radius:8px; border:0; font-size:16px; margin:8px 0; }
-  #calibForm .row { margin-top:8px; }
-  small.hint { color:#bbb; display:block; margin-top:4px; }
 </style>
 </head>
 <body>
 <div id="stage">
   <video id="localVideo" autoplay playsinline muted></video>
   <canvas id="freezeCanvas"></canvas>
-  <canvas id="overlay"></canvas>
   <div id="crosshair"></div>
 
   <div id="remoteBox">
@@ -94,34 +84,12 @@
     </div>
   </div>
 
-  <div id="calibForm">
-    <div>Enter the real-world length of the line you just drew:</div>
-    <input id="calibInput" type="number" step="0.1" inputmode="decimal" placeholder="e.g. 36" />
-    <div class="row">
-      <select id="calibUnit" style="flex:1; padding:10px; border-radius:8px; border:0; font-size:16px;">
-        <option value="in">inches</option>
-        <option value="ft">feet</option>
-      </select>
-    </div>
-    <small class="hint">Use something already in frame with a known size (a door, a yardstick, a sheet of paper).</small>
-    <div class="row" style="margin-top:10px;">
-      <button class="secondary" id="calibCancelBtn">Cancel</button>
-      <button id="calibConfirmBtn">Use this</button>
-    </div>
-  </div>
-
   <div id="controls">
     <div class="row">
-      <button id="arBtn" style="display:none;">Start AR Measure</button>
-      <button id="manualBtn" class="secondary">Measure on Photo</button>
-    </div>
-    <div class="row" id="arActiveRow" style="display:none;">
-      <button id="arPlaceBtn">Drop Pin</button>
-      <button id="arCancelBtn" class="danger">Cancel</button>
+      <button id="arBtn" style="display:none;">Enable AR (one tap)</button>
     </div>
     <div class="row" id="camRow">
       <button id="flipBtn" class="secondary">Flip Camera</button>
-      <button id="muteBtn" class="secondary">Mute Mic</button>
     </div>
   </div>
 </div>
@@ -130,8 +98,6 @@
 const $ = (id) => document.getElementById(id);
 const localVideo = $('localVideo');
 const remoteVideo = $('remoteVideo');
-const overlay = $('overlay');
-const octx = overlay.getContext('2d');
 const freezeCanvas = $('freezeCanvas');
 const statusText = $('statusText');
 const dot = $('dot');
@@ -140,18 +106,13 @@ const measureBanner = $('measureBanner');
 const resultCard = $('resultCard');
 const resultBig = $('resultBig');
 const resultLabel = $('resultLabel');
-const calibForm = $('calibForm');
-const calibInput = $('calibInput');
-const calibUnit = $('calibUnit');
 
-function resizeOverlay() {
-  overlay.width = window.innerWidth;
-  overlay.height = window.innerHeight;
+function resizeCanvases() {
   freezeCanvas.width = window.innerWidth;
   freezeCanvas.height = window.innerHeight;
 }
-window.addEventListener('resize', resizeOverlay);
-resizeOverlay();
+window.addEventListener('resize', resizeCanvases);
+resizeCanvases();
 
 // ---------- Room / signaling ----------
 const roomId = location.pathname.split('/').pop();
@@ -194,7 +155,9 @@ ws.addEventListener('message', async (ev) => {
     placeARPoint();
   } else if (msg.type === 'remote-reset-ar') {
     arPoint1 = null;
-    if (xrSession) measureBanner.textContent = 'Reset. Point at the first wall, then drop a pin.';
+    if (xrSession) measureBanner.textContent = 'Reset. Point at the first wall — your assessor will drop the pin.';
+  } else if (msg.type === 'remote-end-ar') {
+    endAR(true);
   } else if (msg.type === 'remote-capture-photo') {
     captureAndSendFrame();
   } else if (msg.type === 'remote-photo-done') {
@@ -278,13 +241,6 @@ $('flipBtn').addEventListener('click', () => {
   startCamera(currentFacing).catch(console.error);
 });
 
-let muted = false;
-$('muteBtn').addEventListener('click', () => {
-  muted = !muted;
-  if (localStream) localStream.getAudioTracks().forEach((t) => (t.enabled = !muted));
-  $('muteBtn').textContent = muted ? 'Unmute Mic' : 'Mute Mic';
-});
-
 function sendMeasurement(payload) {
   ws.send(JSON.stringify({ type: 'measurement', ...payload }));
 }
@@ -297,10 +253,11 @@ function formatMeters(m) {
 }
 
 // ---------- AR measurement (WebXR hit-test, Android Chrome / ARCore) ----------
+// Starting the session has to be a real local tap — browsers require a
+// direct user gesture for navigator.xr.requestSession(), no way around
+// that. Everything after this one tap (dropping pins, ending the session)
+// is driven remotely by the assessor.
 const arBtn = $('arBtn');
-const arActiveRow = $('arActiveRow');
-const arPlaceBtn = $('arPlaceBtn');
-const arCancelBtn = $('arCancelBtn');
 let xrSession = null;
 let xrHitPose = null;
 let arPoint1 = null;
@@ -316,8 +273,6 @@ async function checkAR() {
 checkAR();
 
 arBtn.addEventListener('click', startAR);
-arCancelBtn.addEventListener('click', () => endAR(true));
-arPlaceBtn.addEventListener('click', placeARPoint);
 
 async function startAR() {
   try {
@@ -337,12 +292,10 @@ async function startAR() {
     arPoint1 = null;
     xrHitPose = null;
     arBtn.style.display = 'none';
-    arActiveRow.style.display = '';
     $('camRow').style.display = 'none';
-    $('manualBtn').style.display = 'none';
     crosshair.style.display = '';
     measureBanner.style.display = '';
-    measureBanner.textContent = 'Point the crosshair at one wall, then tap "Drop Pin".';
+    measureBanner.textContent = 'Aim the crosshair at a wall — your assessor will take it from here.';
     ws.send(JSON.stringify({ type: 'ar-started' }));
 
     xrSession.addEventListener('end', () => onAREnd());
@@ -376,7 +329,7 @@ async function startAR() {
     xrSession.requestAnimationFrame(onXRFrame);
   } catch (err) {
     console.error(err);
-    alert('AR measurement is not available on this device/browser. Use "Measure on Photo" instead.');
+    alert('AR measurement is not available on this device/browser. Your assessor can use photo measuring instead.');
     endAR(true);
   }
 }
@@ -385,7 +338,7 @@ function placeARPoint() {
   if (!xrHitPose) return;
   if (!arPoint1) {
     arPoint1 = { ...xrHitPose };
-    measureBanner.textContent = 'Point 1 set. Walk/pan to the opposite wall and tap "Drop Pin" again.';
+    measureBanner.textContent = 'First point set. Walk/pan toward the opposite wall.';
   } else {
     const p2 = xrHitPose;
     const dx = p2.x - arPoint1.x, dy = p2.y - arPoint1.y, dz = p2.z - arPoint1.z;
@@ -411,51 +364,13 @@ function onAREnd() {
   crosshair.style.display = 'none';
   crosshair.classList.remove('hit');
   measureBanner.style.display = 'none';
-  arActiveRow.style.display = 'none';
   $('camRow').style.display = '';
-  $('manualBtn').style.display = '';
   ws.send(JSON.stringify({ type: 'ar-ended' }));
   checkAR();
 }
 
-// ---------- Manual "measure on photo" fallback (works on any device) ----------
-const manualBtn = $('manualBtn');
-let frozen = false;
-let calibPts = [];
-let targetPts = [];
-let stage = null; // 'calib' | 'target'
-let pxPerUnit = null; // pixels per inch
-
-manualBtn.addEventListener('click', () => {
-  const fctx = freezeCanvas.getContext('2d');
-  const vw = localVideo.videoWidth, vh = localVideo.videoHeight;
-  if (!vw) return;
-  // Draw video (object-fit:cover) onto the freeze canvas at screen size.
-  const cw = freezeCanvas.width, ch = freezeCanvas.height;
-  const scale = Math.max(cw / vw, ch / vh);
-  const dw = vw * scale, dh = vh * scale;
-  const dx = (cw - dw) / 2, dy = (ch - dh) / 2;
-  fctx.drawImage(localVideo, dx, dy, dw, dh);
-  freezeCanvas.style.display = '';
-  frozen = true;
-  calibPts = []; targetPts = []; pxPerUnit = null;
-  stage = 'calib';
-  octx.clearRect(0, 0, overlay.width, overlay.height);
-  measureBanner.style.display = '';
-  measureBanner.textContent = 'Tap the two ends of a known-size object (step 1 of 2).';
-  manualBtn.textContent = 'Cancel Photo Measure';
-  manualBtn.onclick = cancelManual;
-  arBtn.style.display = 'none';
-});
-
-function cancelManual() {
-  // Simplest reliable way to fully reset AR/manual state + listeners.
-  location.reload();
-}
-
-// Triggered remotely by the operator instead of the local button — just
-// grabs the current frame and sends it over, without entering the local
-// tap-to-measure flow (the assessor does the tapping on their own screen).
+// Triggered remotely by the operator — grabs the current frame and sends
+// it over so the assessor can do the measuring taps on their own screen.
 function captureAndSendFrame() {
   const fctx = freezeCanvas.getContext('2d');
   const vw = localVideo.videoWidth, vh = localVideo.videoHeight;
@@ -472,75 +387,9 @@ function captureAndSendFrame() {
   ws.send(JSON.stringify({ type: 'photo-frame', image: dataUrl, width: cw, height: ch }));
 }
 
-overlay.addEventListener('pointerdown', (e) => {
-  if (!frozen) return;
-  if (calibForm.style.display === 'block') return;
-  const x = e.clientX, y = e.clientY;
-  if (stage === 'calib') {
-    calibPts.push({ x, y });
-    drawPoint(x, y, '#ffcc00');
-    if (calibPts.length === 2) {
-      drawLine(calibPts[0], calibPts[1], '#ffcc00');
-      calibForm.style.display = 'block';
-    }
-  } else if (stage === 'target') {
-    targetPts.push({ x, y });
-    drawPoint(x, y, '#3ecf5f');
-    if (targetPts.length === 2) {
-      drawLine(targetPts[0], targetPts[1], '#3ecf5f');
-      const dx = targetPts[1].x - targetPts[0].x, dy = targetPts[1].y - targetPts[0].y;
-      const pxDist = Math.sqrt(dx * dx + dy * dy);
-      const inches = pxDist / pxPerUnit;
-      const meters = inches * 0.0254;
-      const f = formatMeters(meters);
-      measureBanner.style.display = 'none';
-      const thumb = freezeCanvas.toDataURL('image/jpeg', 0.5);
-      showResult('Wall-to-wall (estimated)', f.label, `${f.meters} m — calibrated estimate`);
-      sendMeasurement({ mode: 'manual', distanceMeters: f.meters, label: f.label, thumb });
-    }
-  }
-});
-
-function drawPoint(x, y, color) {
-  octx.fillStyle = color;
-  octx.beginPath();
-  octx.arc(x, y, 8, 0, Math.PI * 2);
-  octx.fill();
-}
-function drawLine(a, b, color) {
-  octx.strokeStyle = color;
-  octx.lineWidth = 3;
-  octx.beginPath();
-  octx.moveTo(a.x, a.y);
-  octx.lineTo(b.x, b.y);
-  octx.stroke();
-}
-
-$('calibCancelBtn').addEventListener('click', () => {
-  calibPts = [];
-  octx.clearRect(0, 0, overlay.width, overlay.height);
-  calibForm.style.display = 'none';
-  measureBanner.textContent = 'Tap the two ends of a known-size object (step 1 of 2).';
-});
-
-$('calibConfirmBtn').addEventListener('click', () => {
-  const val = parseFloat(calibInput.value);
-  if (!val || val <= 0) { calibInput.focus(); return; }
-  const inches = calibUnit.value === 'ft' ? val * 12 : val;
-  const dx = calibPts[1].x - calibPts[0].x, dy = calibPts[1].y - calibPts[0].y;
-  const pxDist = Math.sqrt(dx * dx + dy * dy);
-  pxPerUnit = pxDist / inches;
-  calibForm.style.display = 'none';
-  calibInput.value = '';
-  stage = 'target';
-  measureBanner.style.display = '';
-  measureBanner.textContent = 'Now tap the two wall points you want to measure (step 2 of 2).';
-});
-
 function showResult(label, big, sub) {
   resultLabel.textContent = label;
   resultBig.textContent = big;
-  resultCard.querySelector('#resultBig').nextSibling; // no-op
   resultCard.style.display = 'block';
   let subEl = resultCard.querySelector('.sub');
   if (!subEl) {
@@ -554,7 +403,6 @@ function showResult(label, big, sub) {
 
 $('resultCloseBtn').addEventListener('click', () => {
   resultCard.style.display = 'none';
-  if (frozen) cancelManual();
 });
 </script>
 </body>
