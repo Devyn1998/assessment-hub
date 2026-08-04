@@ -19,8 +19,22 @@
   #remoteBox video { width:100%; height:100%; object-fit:cover; }
   #remoteLabel { position:absolute; bottom:0; left:0; right:0; font-size:10px; text-align:center; background:rgba(0,0,0,.55); color:#fff; padding:2px 0; }
   #status {
-    position:absolute; top:14px; left:14px; z-index:20; color:#fff; background:rgba(0,0,0,.5);
+    position:absolute; top:40px; left:14px; z-index:20; color:#fff; background:rgba(0,0,0,.5);
     padding:6px 10px; border-radius:8px; font-size:12px; max-width:60vw;
+  }
+  #promoBanner {
+    position:absolute; top:0; left:0; right:0; height:26px; z-index:22;
+    background:rgba(0,0,0,.7); overflow:hidden; display:none;
+    border-bottom:1px solid rgba(255,255,255,.15);
+  }
+  #promoBanner .marquee-text {
+    display:inline-block; white-space:nowrap; padding-left:100%;
+    line-height:26px; font-size:12px; font-weight:600; color:#ffcc00;
+    animation: promoMarquee 9s linear infinite;
+  }
+  @keyframes promoMarquee {
+    0% { transform: translateX(0); }
+    100% { transform: translateX(-100%); }
   }
   #dot { display:inline-block; width:8px; height:8px; border-radius:50%; background:#e33; margin-right:6px; }
   #dot.live { background:#3ecf5f; }
@@ -73,6 +87,7 @@
     <div id="remoteLabel">Assessor</div>
   </div>
 
+  <div id="promoBanner"><span class="marquee-text">explore our other options for no money out of pocket upgrades</span></div>
   <div id="status"><span id="dot"></span><span id="statusText">Connecting…</span></div>
   <div id="measureBanner"></div>
 
@@ -125,6 +140,28 @@ let currentFacing = 'environment';
 function setStatus(text, live) {
   statusText.textContent = text;
   dot.classList.toggle('live', !!live);
+  if (live && !callStarted) {
+    callStarted = true;
+    scheduleBanner(2 * 60 * 1000); // first appearance at 2 minutes in
+  }
+}
+
+// ---------- Promo banner (marquee, 2 min in, 20s duration, repeats every 10 min) ----------
+let callStarted = false;
+const promoBanner = $('promoBanner');
+
+function scheduleBanner(delay) {
+  setTimeout(() => {
+    showBannerOnce();
+    scheduleBanner(10 * 60 * 1000); // next appearance 10 minutes after this one starts
+  }, delay);
+}
+
+function showBannerOnce() {
+  promoBanner.style.display = 'block';
+  setTimeout(() => {
+    promoBanner.style.display = 'none';
+  }, 20 * 1000);
 }
 
 ws.addEventListener('open', () => {
