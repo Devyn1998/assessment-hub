@@ -11,8 +11,9 @@
   body { margin:0; background:#0b0c0f; color:#eee; font-family:-apple-system,system-ui,Segoe UI,Roboto,sans-serif; }
   header { padding:14px 20px; border-bottom:1px solid #222; display:flex; align-items:center; gap:16px; flex-wrap:wrap; }
   header h1 { font-size:16px; margin:0; font-weight:700; }
-  #layout { display:grid; grid-template-columns: 1fr 340px; gap:16px; padding:16px; max-width:1400px; margin:0 auto; }
-  @media (max-width: 900px) { #layout { grid-template-columns: 1fr; } }
+  #jobInfoWrap { max-width:1400px; margin:16px auto 0; padding:0 16px; }
+  #layout { display:grid; grid-template-columns: 280px 1fr 340px; gap:16px; padding:16px; max-width:1400px; margin:0 auto; align-items:start; }
+  @media (max-width: 1100px) { #layout { grid-template-columns: 1fr; } }
   .panel { background:#15171b; border:1px solid #222; border-radius:12px; padding:14px; }
   #videoWrap { position:relative; width:100%; aspect-ratio:16/9; background:#000; border-radius:10px; overflow:hidden; }
   #remoteVideo { width:100%; height:100%; object-fit:cover; background:#000; }
@@ -33,7 +34,7 @@
   .measure-card .val { font-size:22px; font-weight:700; margin:2px 0; }
   .measure-card .sub { font-size:11px; color:#888; }
   .measure-card img { width:100%; border-radius:6px; margin-top:8px; display:block; }
-  #empty { color:#666; font-size:13px; text-align:center; padding:20px 0; }
+  #empty, #photoEmpty { color:#666; font-size:13px; text-align:center; padding:20px 0; }
   code { background:#0d0e11; padding:2px 6px; border-radius:4px; }
   .hint { font-size:12px; color:#999; margin:0 0 10px; }
   .indicator { display:inline-flex; align-items:center; gap:6px; font-size:12px; color:#aaa; margin-bottom:10px; }
@@ -46,6 +47,19 @@
   #opCalibForm { display:none; background:#0d0e11; border:1px solid #262a31; border-radius:8px; padding:10px; margin-top:10px; }
   #opCalibForm input { width:100%; padding:8px; border-radius:6px; border:1px solid #333; background:#15171b; color:#eee; font-size:14px; margin:6px 0; }
   #opCalibForm select { width:100%; padding:8px; border-radius:6px; border:1px solid #333; background:#15171b; color:#eee; font-size:14px; }
+
+  #jobInfoPanel { display:flex; gap:12px; flex-wrap:wrap; align-items:flex-end; }
+  #jobInfoPanel .field { flex:1; min-width:200px; }
+  #jobInfoPanel label { font-size:11px; color:#999; display:block; margin-bottom:4px; }
+  #jobInfoPanel input { width:100%; padding:10px; border-radius:8px; border:1px solid #333; background:#0d0e11; color:#eee; font-size:13px; }
+
+  #sidebarPanel { display:flex; flex-direction:column; max-height:calc(100vh - 110px); position:sticky; top:16px; }
+  #photoGallery { overflow:auto; flex:1; min-height:0; margin-top:2px; }
+  .photo-entry { background:#0d0e11; border:1px solid #262a31; border-radius:10px; padding:8px; margin-bottom:12px; }
+  .photo-entry img { width:100%; border-radius:6px; display:block; margin-bottom:6px; }
+  .photo-time { font-size:11px; color:#888; margin-bottom:4px; }
+  .photo-measure { font-size:12px; color:#8ab4ff; font-weight:600; margin-bottom:6px; }
+  .photo-desc { width:100%; min-height:52px; resize:vertical; padding:6px; border-radius:6px; border:1px solid #333; background:#15171b; color:#eee; font-size:12px; font-family:inherit; }
 </style>
 </head>
 <body>
@@ -54,7 +68,29 @@
   <div id="status"><span class="dot" id="dot"></span><span id="statusText">Starting…</span></div>
 </header>
 
+<div id="jobInfoWrap">
+  <div class="panel" id="jobInfoPanel">
+    <div class="field">
+      <label>Customer Name</label>
+      <input id="customerNameInput" placeholder="Jane Doe" />
+    </div>
+    <div class="field" style="flex:2;">
+      <label>Address</label>
+      <input id="addressInput" placeholder="123 Main St, Springfield" />
+    </div>
+    <button id="endAssessmentBtn">End Assessment &amp; Export</button>
+  </div>
+</div>
+
 <div id="layout">
+  <div class="panel" id="sidebarPanel">
+    <h2>Photo Memory Bank</h2>
+    <button id="takePhotoBtn" class="secondary" style="margin-bottom:12px;">Take Photo</button>
+    <div id="photoGallery">
+      <div id="photoEmpty">No photos yet. Use "Take Photo" or measure a wall to start building the record.</div>
+    </div>
+  </div>
+
   <div>
     <div class="panel">
       <h2>Homeowner link</h2>
@@ -85,13 +121,13 @@
     <div class="indicator" id="arIndicatorRow" style="display:none;">
       <span class="idot" id="arDot"></span><span id="arIndicatorText">AR not started on their end</span>
     </div>
-    <div class="row" id="arRemoteRow" style="display:none; gap:8px; margin-bottom:14px;">
+    <div id="arRemoteRow" style="display:none; gap:8px; margin-bottom:14px; display:none;">
       <button id="dropPinBtn" disabled>Drop Pin</button>
       <button id="resetArBtn" class="secondary">Reset</button>
       <button id="endArBtn" class="secondary">End AR</button>
     </div>
 
-    <div class="row" style="gap:8px;">
+    <div style="display:flex; gap:8px;">
       <button id="capturePhotoBtn" class="secondary">Capture Photo to Measure</button>
     </div>
 
@@ -106,12 +142,12 @@
         <option value="in">inches</option>
         <option value="ft">feet</option>
       </select>
-      <div class="row" style="margin-top:8px; gap:8px;">
+      <div style="display:flex; margin-top:8px; gap:8px;">
         <button class="secondary" id="opCalibCancelBtn">Cancel</button>
         <button id="opCalibConfirmBtn">Use this</button>
       </div>
     </div>
-    <div class="row" id="photoCancelRow" style="gap:8px; margin-top:8px; display:none;">
+    <div id="photoCancelRow" style="gap:8px; margin-top:8px; display:none;">
       <button class="secondary" id="cancelPhotoBtn">Cancel Photo Measure</button>
     </div>
   </div>
@@ -148,10 +184,20 @@ const opCalibForm = $('opCalibForm');
 const opCalibInput = $('opCalibInput');
 const opCalibUnit = $('opCalibUnit');
 const photoCancelRow = $('photoCancelRow');
+const takePhotoBtn = $('takePhotoBtn');
+const photoGallery = $('photoGallery');
+const photoEmpty = $('photoEmpty');
+const customerNameInput = $('customerNameInput');
+const addressInput = $('addressInput');
+const endAssessmentBtn = $('endAssessmentBtn');
 
 let ws, pc, roomId, localStream = null;
 let arStep = 0; // UI-only hint counter; homeowner side is the source of truth
 let arHitOk = false;
+let measurementLog = [];
+let sessionPhotos = [];
+let pendingMeasurePhoto = null;
+let photoCounter = 0;
 
 function setStatus(text, live) {
   statusText.textContent = text;
@@ -219,7 +265,13 @@ function connectWS() {
     } else if (msg.type === 'ar-hit-state') {
       setArIndicator(msg.hit, msg.hit ? 'Surface detected — ready to drop pin' : 'No surface — aim at a flat wall');
     } else if (msg.type === 'photo-frame') {
-      showReceivedPhoto(msg.image);
+      if (msg.mode === 'document') {
+        addGalleryPhoto(msg.image, 'document');
+        ws.send(JSON.stringify({ type: 'remote-photo-done' }));
+      } else {
+        pendingMeasurePhoto = addGalleryPhoto(msg.image, 'measure');
+        showReceivedPhoto(msg.image);
+      }
     }
   });
 }
@@ -281,6 +333,7 @@ $('newBtn').addEventListener('click', () => {
 });
 
 function addMeasurement(msg) {
+  measurementLog.push({ ...msg, time: Date.now() });
   empty.remove();
   const card = document.createElement('div');
   card.className = 'measure-card';
@@ -304,6 +357,99 @@ function formatMeters(m) {
   const inch = Math.round((totalIn - ft * 12) * 10) / 10;
   return { feet: ft, inches: inch, label: `${ft}' ${inch}"`, meters: Math.round(m * 100) / 100 };
 }
+
+// ---------- Photo memory bank ----------
+function addGalleryPhoto(dataUrl, mode) {
+  const entry = { id: ++photoCounter, dataUrl, time: new Date(), description: '', mode, measurement: null };
+  sessionPhotos.push(entry);
+  if (photoEmpty && photoEmpty.parentNode) photoEmpty.remove();
+
+  const div = document.createElement('div');
+  div.className = 'photo-entry';
+  div.innerHTML = `
+    <img src="${dataUrl}" />
+    <div class="photo-time">${entry.time.toLocaleTimeString()}${mode === 'measure' ? ' · Measurement photo' : ''}</div>
+    <div class="photo-measure" style="display:none;"></div>
+    <textarea class="photo-desc" placeholder="Add a description…"></textarea>
+  `;
+  entry.measureEl = div.querySelector('.photo-measure');
+  const textarea = div.querySelector('.photo-desc');
+  textarea.addEventListener('input', () => { entry.description = textarea.value; });
+  photoGallery.prepend(div);
+  return entry;
+}
+
+takePhotoBtn.addEventListener('click', () => {
+  if (!ws) return;
+  ws.send(JSON.stringify({ type: 'remote-capture-photo', mode: 'document' }));
+  takePhotoBtn.textContent = 'Capturing…';
+  takePhotoBtn.disabled = true;
+  setTimeout(() => { takePhotoBtn.textContent = 'Take Photo'; takePhotoBtn.disabled = false; }, 4000);
+});
+
+// ---------- Job export ----------
+function escapeHtml(str) {
+  return String(str).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+}
+
+function safeFileName(s) {
+  // Strip characters Windows/macOS reject outright in filenames.
+  // Note: Windows also disallows the pipe character in filenames — Chrome
+  // will auto-swap it for an underscore on save even though we build the
+  // name with a pipe here.
+  return String(s).replace(/[\\/:*?"<>]/g, '-').trim();
+}
+
+function buildAndDownloadReport() {
+  const customerName = customerNameInput.value.trim() || 'Unknown Customer';
+  const address = addressInput.value.trim() || 'Unknown Address';
+  const now = new Date();
+
+  const sortedPhotos = sessionPhotos.slice().sort((a, b) => a.time - b.time);
+  const photosHtml = sortedPhotos.map((p) => `
+    <div style="background:#f7f7f7;border:1px solid #ddd;border-radius:10px;padding:12px;margin-bottom:16px;">
+      <img src="${p.dataUrl}" style="max-width:100%;border-radius:6px;display:block;margin-bottom:8px;" />
+      <div style="font-size:12px;color:#666;">${p.time.toLocaleString()}${p.mode === 'measure' ? ' · Measurement photo' : ''}</div>
+      ${p.measurement ? `<div style="font-weight:700;color:#1e6fe0;margin-top:4px;">Measured: ${escapeHtml(p.measurement.label)} (${p.measurement.distanceMeters} m)</div>` : ''}
+      ${p.description ? `<div style="margin-top:8px;white-space:pre-wrap;">${escapeHtml(p.description)}</div>` : '<div style="margin-top:8px;color:#999;font-style:italic;">No description added.</div>'}
+    </div>
+  `).join('');
+
+  const measurementsHtml = measurementLog.length
+    ? measurementLog.map((m) => `<li>${m.mode === 'ar' ? 'AR Measurement' : 'Photo Estimate'} — <strong>${escapeHtml(m.label || '')}</strong> (${m.distanceMeters} m) — ${new Date(m.time).toLocaleTimeString()}</li>`).join('')
+    : '<li style="color:#999;">No measurements recorded.</li>';
+
+  const html = `<!doctype html>
+<html><head><meta charset="utf-8"><title>Assessment Report — ${escapeHtml(address)}</title>
+<style>
+  body { font-family: -apple-system, system-ui, Segoe UI, Roboto, sans-serif; background:#fff; color:#111; margin:0; padding:32px; }
+  .wrap { max-width:900px; margin:0 auto; }
+  h1 { font-size:22px; margin-bottom:4px; }
+  .meta { color:#666; font-size:13px; margin-bottom:24px; }
+  h2 { font-size:16px; border-bottom:2px solid #eee; padding-bottom:6px; margin-top:32px; }
+  ul { padding-left:20px; }
+</style>
+</head><body><div class="wrap">
+  <h1>${escapeHtml(address)}</h1>
+  <div class="meta">Customer: ${escapeHtml(customerName)} &nbsp;·&nbsp; Assessment date: ${now.toLocaleString()}</div>
+  <h2>Measurements</h2>
+  <ul>${measurementsHtml}</ul>
+  <h2>Photos (${sortedPhotos.length})</h2>
+  ${photosHtml || '<p style="color:#999;">No photos captured.</p>'}
+</div></body></html>`;
+
+  const blob = new Blob([html], { type: 'text/html' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `${safeFileName(address)} | ${safeFileName(customerName)}.html`;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 2000);
+}
+
+endAssessmentBtn.addEventListener('click', buildAndDownloadReport);
 
 // ---------- Remote AR pin control ----------
 function setArIndicator(hit, text) {
@@ -351,7 +497,7 @@ let opPxPerUnit = null;
 
 capturePhotoBtn.addEventListener('click', () => {
   if (!ws) return;
-  ws.send(JSON.stringify({ type: 'remote-capture-photo' }));
+  ws.send(JSON.stringify({ type: 'remote-capture-photo', mode: 'measure' }));
   capturePhotoBtn.textContent = 'Requesting photo…';
   capturePhotoBtn.disabled = true;
   setTimeout(() => { capturePhotoBtn.textContent = 'Capture Photo to Measure'; capturePhotoBtn.disabled = false; }, 4000);
@@ -396,6 +542,12 @@ photoOverlay.addEventListener('click', (e) => {
       const f = formatMeters(meters);
       const result = { mode: 'manual', distanceMeters: f.meters, label: f.label };
       addMeasurement(result);
+      if (pendingMeasurePhoto) {
+        pendingMeasurePhoto.measurement = result;
+        pendingMeasurePhoto.measureEl.textContent = `Measured: ${result.label}`;
+        pendingMeasurePhoto.measureEl.style.display = '';
+        pendingMeasurePhoto = null;
+      }
       ws.send(JSON.stringify({ type: 'measurement-result', ...result }));
       ws.send(JSON.stringify({ type: 'remote-photo-done' }));
       opStage = null;
@@ -444,6 +596,7 @@ $('cancelPhotoBtn').addEventListener('click', () => {
   photoCancelRow.style.display = 'none';
   opCalibForm.style.display = 'none';
   if (ws) ws.send(JSON.stringify({ type: 'remote-photo-done' }));
+  pendingMeasurePhoto = null;
 });
 
 newSession();

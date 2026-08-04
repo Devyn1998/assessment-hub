@@ -159,7 +159,7 @@ ws.addEventListener('message', async (ev) => {
   } else if (msg.type === 'remote-end-ar') {
     endAR(true);
   } else if (msg.type === 'remote-capture-photo') {
-    captureAndSendFrame();
+    captureAndSendFrame(msg.mode || 'measure');
   } else if (msg.type === 'remote-photo-done') {
     freezeCanvas.style.display = 'none';
     measureBanner.style.display = 'none';
@@ -371,7 +371,7 @@ function onAREnd() {
 
 // Triggered remotely by the operator — grabs the current frame and sends
 // it over so the assessor can do the measuring taps on their own screen.
-function captureAndSendFrame() {
+function captureAndSendFrame(mode) {
   const fctx = freezeCanvas.getContext('2d');
   const vw = localVideo.videoWidth, vh = localVideo.videoHeight;
   if (!vw) return;
@@ -382,9 +382,11 @@ function captureAndSendFrame() {
   fctx.drawImage(localVideo, dx, dy, dw, dh);
   freezeCanvas.style.display = '';
   measureBanner.style.display = '';
-  measureBanner.textContent = 'Hold steady — your assessor is measuring from this photo.';
+  measureBanner.textContent = mode === 'document'
+    ? 'Hold steady — your assessor is taking a photo.'
+    : 'Hold steady — your assessor is measuring from this photo.';
   const dataUrl = freezeCanvas.toDataURL('image/jpeg', 0.6);
-  ws.send(JSON.stringify({ type: 'photo-frame', image: dataUrl, width: cw, height: ch }));
+  ws.send(JSON.stringify({ type: 'photo-frame', image: dataUrl, width: cw, height: ch, mode: mode || 'measure' }));
 }
 
 function showResult(label, big, sub) {
