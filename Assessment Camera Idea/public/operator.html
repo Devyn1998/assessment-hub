@@ -35,6 +35,17 @@
   .measure-card img { width:100%; border-radius:6px; margin-top:8px; display:block; }
   #empty { color:#666; font-size:13px; text-align:center; padding:20px 0; }
   code { background:#0d0e11; padding:2px 6px; border-radius:4px; }
+  .hint { font-size:12px; color:#999; margin:0 0 10px; }
+  .indicator { display:inline-flex; align-items:center; gap:6px; font-size:12px; color:#aaa; margin-bottom:10px; }
+  .indicator .idot { width:8px; height:8px; border-radius:50%; background:#555; }
+  .indicator .idot.on { background:#3ecf5f; }
+  .indicator .idot.off { background:#e33; }
+  #photoWrap { position:relative; width:100%; background:#000; border-radius:10px; overflow:hidden; display:none; margin-top:10px; }
+  #photoWrap img { width:100%; display:block; }
+  #photoOverlay { position:absolute; inset:0; width:100%; height:100%; cursor:crosshair; }
+  #opCalibForm { display:none; background:#0d0e11; border:1px solid #262a31; border-radius:8px; padding:10px; margin-top:10px; }
+  #opCalibForm input { width:100%; padding:8px; border-radius:6px; border:1px solid #333; background:#15171b; color:#eee; font-size:14px; margin:6px 0; }
+  #opCalibForm select { width:100%; padding:8px; border-radius:6px; border:1px solid #333; background:#15171b; color:#eee; font-size:14px; }
 </style>
 </head>
 <body>
@@ -66,9 +77,48 @@
     </div>
   </div>
 
+  <div>
   <div class="panel">
+    <h2>Measure remotely</h2>
+    <p class="hint">You control the pins — the homeowner just aims the camera.</p>
+
+    <div class="indicator" id="arIndicatorRow" style="display:none;">
+      <span class="idot" id="arDot"></span><span id="arIndicatorText">AR not started on their end</span>
+    </div>
+    <div class="row" id="arRemoteRow" style="display:none; gap:8px; margin-bottom:14px;">
+      <button id="dropPinBtn" disabled>Drop Pin</button>
+      <button id="resetArBtn" class="secondary">Reset</button>
+    </div>
+
+    <div class="row" style="gap:8px;">
+      <button id="capturePhotoBtn" class="secondary">Capture Photo to Measure</button>
+    </div>
+
+    <div id="photoWrap">
+      <img id="photoImg" />
+      <canvas id="photoOverlay"></canvas>
+    </div>
+    <div id="opCalibForm">
+      <div style="font-size:13px;">Real-world length of the yellow line:</div>
+      <input id="opCalibInput" type="number" step="0.1" placeholder="e.g. 36" />
+      <select id="opCalibUnit">
+        <option value="in">inches</option>
+        <option value="ft">feet</option>
+      </select>
+      <div class="row" style="margin-top:8px; gap:8px;">
+        <button class="secondary" id="opCalibCancelBtn">Cancel</button>
+        <button id="opCalibConfirmBtn">Use this</button>
+      </div>
+    </div>
+    <div class="row" id="photoCancelRow" style="gap:8px; margin-top:8px; display:none;">
+      <button class="secondary" id="cancelPhotoBtn">Cancel Photo Measure</button>
+    </div>
+  </div>
+
+  <div class="panel" style="margin-top:16px;">
     <h2>Measurements</h2>
-    <div id="log"><div id="empty">No measurements yet. Ask the homeowner to tap "Start AR Measure" or "Measure on Photo" once you're both connected.</div></div>
+    <div id="log"><div id="empty">No measurements yet. Ask the homeowner to tap "Start AR Measure," or use the remote controls above.</div></div>
+  </div>
   </div>
 </div>
 
@@ -81,8 +131,25 @@ const remoteVideo = $('remoteVideo');
 const selfVideo = $('selfVideo');
 const log = $('log');
 const empty = $('empty');
+const arIndicatorRow = $('arIndicatorRow');
+const arDot = $('arDot');
+const arIndicatorText = $('arIndicatorText');
+const arRemoteRow = $('arRemoteRow');
+const dropPinBtn = $('dropPinBtn');
+const resetArBtn = $('resetArBtn');
+const capturePhotoBtn = $('capturePhotoBtn');
+const photoWrap = $('photoWrap');
+const photoImg = $('photoImg');
+const photoOverlay = $('photoOverlay');
+const potx = photoOverlay.getContext('2d');
+const opCalibForm = $('opCalibForm');
+const opCalibInput = $('opCalibInput');
+const opCalibUnit = $('opCalibUnit');
+const photoCancelRow = $('photoCancelRow');
 
 let ws, pc, roomId, localStream = null;
+let arStep = 0; // UI-only hint counter; homeowner side is the source of truth
+let arHitOk = false;
 
 function setStatus(text, live) {
   statusText.textContent = text;
@@ -138,6 +205,19 @@ function connectWS() {
       }
     } else if (msg.type === 'measurement') {
       addMeasurement(msg);
+    } else if (msg.type === 'ar-started') {
+      arIndicatorRow.style.display = '';
+      arRemoteRow.style.display = 'flex';
+      arStep = 0;
+      setArIndicator(false, 'AR active — aim at a wall');
+    } else if (msg.type === 'ar-ended') {
+      arIndicatorRow.style.display = 'none';
+      arRemoteRow.style.display = 'none';
+      arStep = 0;
+    } else if (msg.type === 'ar-hit-state') {
+      setArIndicator(msg.hit, msg.hit ? 'Surface detected — ready to drop pin' : 'No surface — aim at a flat wall');
+    } else if (msg.type === 'photo-frame') {
+      showReceivedPhoto(msg.image);
     }
   });
 }
@@ -215,6 +295,145 @@ function addMeasurement(msg) {
   }
   log.prepend(card);
 }
+
+function formatMeters(m) {
+  const totalIn = m * 39.3701;
+  const ft = Math.floor(totalIn / 12);
+  const inch = Math.round((totalIn - ft * 12) * 10) / 10;
+  return { feet: ft, inches: inch, label: `${ft}' ${inch}"`, meters: Math.round(m * 100) / 100 };
+}
+
+// ---------- Remote AR pin control ----------
+function setArIndicator(hit, text) {
+  arHitOk = hit;
+  arDot.classList.toggle('on', hit);
+  arDot.classList.toggle('off', !hit);
+  arIndicatorText.textContent = text;
+  dropPinBtn.disabled = !hit;
+}
+
+dropPinBtn.addEventListener('click', () => {
+  if (!ws || !arHitOk) return;
+  ws.send(JSON.stringify({ type: 'remote-drop-pin' }));
+  arStep++;
+  dropPinBtn.textContent = arStep >= 1 ? 'Drop Pin (2nd wall)' : 'Drop Pin';
+  if (arStep >= 2) {
+    // The homeowner's side computes + logs the measurement itself once
+    // both points are set; just reset our local hint state here.
+    arStep = 0;
+    dropPinBtn.textContent = 'Drop Pin';
+  }
+});
+
+resetArBtn.addEventListener('click', () => {
+  if (!ws) return;
+  ws.send(JSON.stringify({ type: 'remote-reset-ar' }));
+  arStep = 0;
+  dropPinBtn.textContent = 'Drop Pin';
+});
+
+// ---------- Remote photo measuring ----------
+let opCalibPts = [];
+let opTargetPts = [];
+let opStage = null; // 'calib' | 'target'
+let opPxPerUnit = null;
+
+capturePhotoBtn.addEventListener('click', () => {
+  if (!ws) return;
+  ws.send(JSON.stringify({ type: 'remote-capture-photo' }));
+  capturePhotoBtn.textContent = 'Requesting photo…';
+  capturePhotoBtn.disabled = true;
+  setTimeout(() => { capturePhotoBtn.textContent = 'Capture Photo to Measure'; capturePhotoBtn.disabled = false; }, 4000);
+});
+
+function showReceivedPhoto(dataUrl) {
+  capturePhotoBtn.textContent = 'Capture Photo to Measure';
+  capturePhotoBtn.disabled = false;
+  photoImg.src = dataUrl;
+  photoWrap.style.display = 'block';
+  photoCancelRow.style.display = 'flex';
+  opCalibPts = []; opTargetPts = []; opPxPerUnit = null;
+  opStage = 'calib';
+  photoImg.onload = () => {
+    photoOverlay.width = photoImg.clientWidth;
+    photoOverlay.height = photoImg.clientHeight;
+    potx.clearRect(0, 0, photoOverlay.width, photoOverlay.height);
+  };
+}
+
+photoOverlay.addEventListener('click', (e) => {
+  if (!opStage) return;
+  if (opCalibForm.style.display === 'block') return;
+  const rect = photoOverlay.getBoundingClientRect();
+  const x = e.clientX - rect.left, y = e.clientY - rect.top;
+  if (opStage === 'calib') {
+    opCalibPts.push({ x, y });
+    opDrawPoint(x, y, '#ffcc00');
+    if (opCalibPts.length === 2) {
+      opDrawLine(opCalibPts[0], opCalibPts[1], '#ffcc00');
+      opCalibForm.style.display = 'block';
+    }
+  } else if (opStage === 'target') {
+    opTargetPts.push({ x, y });
+    opDrawPoint(x, y, '#3ecf5f');
+    if (opTargetPts.length === 2) {
+      opDrawLine(opTargetPts[0], opTargetPts[1], '#3ecf5f');
+      const dx = opTargetPts[1].x - opTargetPts[0].x, dy = opTargetPts[1].y - opTargetPts[0].y;
+      const pxDist = Math.sqrt(dx * dx + dy * dy);
+      const inches = pxDist / opPxPerUnit;
+      const meters = inches * 0.0254;
+      const f = formatMeters(meters);
+      const result = { mode: 'manual', distanceMeters: f.meters, label: f.label };
+      addMeasurement(result);
+      ws.send(JSON.stringify({ type: 'measurement-result', ...result }));
+      ws.send(JSON.stringify({ type: 'remote-photo-done' }));
+      opStage = null;
+      photoCancelRow.style.display = 'none';
+      setTimeout(() => { photoWrap.style.display = 'none'; }, 1500);
+    }
+  }
+});
+
+function opDrawPoint(x, y, color) {
+  potx.fillStyle = color;
+  potx.beginPath();
+  potx.arc(x, y, 7, 0, Math.PI * 2);
+  potx.fill();
+}
+function opDrawLine(a, b, color) {
+  potx.strokeStyle = color;
+  potx.lineWidth = 3;
+  potx.beginPath();
+  potx.moveTo(a.x, a.y);
+  potx.lineTo(b.x, b.y);
+  potx.stroke();
+}
+
+$('opCalibCancelBtn').addEventListener('click', () => {
+  opCalibPts = [];
+  potx.clearRect(0, 0, photoOverlay.width, photoOverlay.height);
+  opCalibForm.style.display = 'none';
+});
+
+$('opCalibConfirmBtn').addEventListener('click', () => {
+  const val = parseFloat(opCalibInput.value);
+  if (!val || val <= 0) { opCalibInput.focus(); return; }
+  const inches = opCalibUnit.value === 'ft' ? val * 12 : val;
+  const dx = opCalibPts[1].x - opCalibPts[0].x, dy = opCalibPts[1].y - opCalibPts[0].y;
+  const pxDist = Math.sqrt(dx * dx + dy * dy);
+  opPxPerUnit = pxDist / inches;
+  opCalibForm.style.display = 'none';
+  opCalibInput.value = '';
+  opStage = 'target';
+});
+
+$('cancelPhotoBtn').addEventListener('click', () => {
+  opStage = null;
+  photoWrap.style.display = 'none';
+  photoCancelRow.style.display = 'none';
+  opCalibForm.style.display = 'none';
+  if (ws) ws.send(JSON.stringify({ type: 'remote-photo-done' }));
+});
 
 newSession();
 </script>

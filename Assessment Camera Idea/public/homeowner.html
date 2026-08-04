@@ -190,6 +190,20 @@ ws.addEventListener('message', async (ev) => {
     if (pc && msg.candidate) {
       try { await pc.addIceCandidate(msg.candidate); } catch (e) { console.warn(e); }
     }
+  } else if (msg.type === 'remote-drop-pin') {
+    placeARPoint();
+  } else if (msg.type === 'remote-reset-ar') {
+    arPoint1 = null;
+    if (xrSession) measureBanner.textContent = 'Reset. Point at the first wall, then drop a pin.';
+  } else if (msg.type === 'remote-capture-photo') {
+    captureAndSendFrame();
+  } else if (msg.type === 'remote-photo-done') {
+    freezeCanvas.style.display = 'none';
+    measureBanner.style.display = 'none';
+  } else if (msg.type === 'measurement-result') {
+    showResult(msg.mode === 'ar' ? 'Wall-to-wall (AR)' : 'Wall-to-wall (estimated)', msg.label, `${msg.distanceMeters} m`);
+    freezeCanvas.style.display = 'none';
+    measureBanner.style.display = 'none';
   }
 });
 
@@ -329,9 +343,11 @@ async function startAR() {
     crosshair.style.display = '';
     measureBanner.style.display = '';
     measureBanner.textContent = 'Point the crosshair at one wall, then tap "Drop Pin".';
+    ws.send(JSON.stringify({ type: 'ar-started' }));
 
     xrSession.addEventListener('end', () => onAREnd());
 
+    let lastHitState = null;
     function onXRFrame(t, frame) {
       if (!xrSession) return;
       xrSession.requestAnimationFrame(onXRFrame);
@@ -341,13 +357,20 @@ async function startAR() {
       gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
 
       const hits = frame.getHitTestResults(hitTestSource);
-      if (hits.length > 0) {
+      const hasHit = hits.length > 0;
+      if (hasHit) {
         const pose = hits[0].getPose(refSpace);
         xrHitPose = pose.transform.position;
         crosshair.classList.add('hit');
       } else {
         xrHitPose = null;
         crosshair.classList.remove('hit');
+      }
+      // Only notify the operator when the surface-detected state actually
+      // flips, not every frame — keeps the socket quiet during normal use.
+      if (hasHit !== lastHitState) {
+        lastHitState = hasHit;
+        ws.send(JSON.stringify({ type: 'ar-hit-state', hit: hasHit }));
       }
     }
     xrSession.requestAnimationFrame(onXRFrame);
@@ -391,6 +414,7 @@ function onAREnd() {
   arActiveRow.style.display = 'none';
   $('camRow').style.display = '';
   $('manualBtn').style.display = '';
+  ws.send(JSON.stringify({ type: 'ar-ended' }));
   checkAR();
 }
 
@@ -427,6 +451,25 @@ manualBtn.addEventListener('click', () => {
 function cancelManual() {
   // Simplest reliable way to fully reset AR/manual state + listeners.
   location.reload();
+}
+
+// Triggered remotely by the operator instead of the local button — just
+// grabs the current frame and sends it over, without entering the local
+// tap-to-measure flow (the assessor does the tapping on their own screen).
+function captureAndSendFrame() {
+  const fctx = freezeCanvas.getContext('2d');
+  const vw = localVideo.videoWidth, vh = localVideo.videoHeight;
+  if (!vw) return;
+  const cw = freezeCanvas.width, ch = freezeCanvas.height;
+  const scale = Math.max(cw / vw, ch / vh);
+  const dw = vw * scale, dh = vh * scale;
+  const dx = (cw - dw) / 2, dy = (ch - dh) / 2;
+  fctx.drawImage(localVideo, dx, dy, dw, dh);
+  freezeCanvas.style.display = '';
+  measureBanner.style.display = '';
+  measureBanner.textContent = 'Hold steady — your assessor is measuring from this photo.';
+  const dataUrl = freezeCanvas.toDataURL('image/jpeg', 0.6);
+  ws.send(JSON.stringify({ type: 'photo-frame', image: dataUrl, width: cw, height: ch }));
 }
 
 overlay.addEventListener('pointerdown', (e) => {
