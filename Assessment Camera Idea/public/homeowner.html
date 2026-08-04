@@ -9,7 +9,7 @@
   :root { color-scheme: dark; }
   * { box-sizing: border-box; }
   html, body { margin:0; padding:0; height:100%; background:#000; font-family: -apple-system, system-ui, Segoe UI, Roboto, sans-serif; overflow:hidden; }
-  #stage { position:relative; width:100vw; height:100vh; background:#000; }
+  #stage { position:relative; width:100vw; height:100vh; height:100dvh; background:#000; }
   #localVideo { position:absolute; inset:0; width:100%; height:100%; object-fit:cover; background:#111; }
   #overlay { position:absolute; inset:0; width:100%; height:100%; touch-action:none; }
   #remoteBox {
@@ -39,7 +39,8 @@
   #crosshair.hit::before, #crosshair.hit::after { background:#3ecf5f; }
 
   #controls {
-    position:absolute; left:0; right:0; bottom:0; z-index:20; padding:14px 14px calc(14px + env(safe-area-inset-bottom));
+    position:absolute; left:0; right:0; bottom:0; z-index:20;
+    padding:14px 14px calc(34px + env(safe-area-inset-bottom));
     background:linear-gradient(to top, rgba(0,0,0,.75), rgba(0,0,0,0));
     display:flex; flex-direction:column; gap:8px; align-items:stretch;
   }
