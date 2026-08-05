@@ -282,6 +282,8 @@ ws.addEventListener('message', async (ev) => {
   } else if (msg.type === 'remote-photo-done') {
     freezeCanvas.style.display = 'none';
     measureBanner.style.display = 'none';
+  } else if (msg.type === 'assessor-name') {
+    $('remoteLabel').textContent = msg.name ? `Assessor: ${msg.name}` : 'Assessor';
   } else if (msg.type === 'measurement-result') {
     showResult(msg.mode === 'ar' ? 'Wall-to-wall (AR)' : 'Wall-to-wall (estimated)', msg.label, `${msg.distanceMeters} m`);
     freezeCanvas.style.display = 'none';

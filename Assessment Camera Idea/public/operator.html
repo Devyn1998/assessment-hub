@@ -22,6 +22,8 @@
   .header-right { display:flex; align-items:center; gap:8px; flex-wrap:wrap; }
   .header-input { padding:9px 11px; border-radius:8px; border:1px solid #2b2e36; background:#0d0e12; color:#eee; font-size:12.5px; width:160px; }
   .header-input.wide { width:230px; }
+  .assessor-picker { display:flex; align-items:center; gap:6px; font-size:12.5px; color:#9a9ca3; }
+  .assessor-picker select { padding:8px 10px; border-radius:8px; border:1px solid #2b2e36; background:#0d0e12; color:#eee; font-size:12.5px; }
 
   main { max-width:1400px; margin:0 auto; padding:20px; display:grid; grid-template-columns: 1fr 400px; gap:20px; align-items:start; }
   @media (max-width: 1050px) { main { grid-template-columns: 1fr; } }
@@ -164,6 +166,15 @@
     <input id="customerNameInput" class="header-input" placeholder="Customer name" />
     <input id="addressInput" class="header-input wide" placeholder="Address" />
     <button id="endAssessmentBtn">End &amp; Export</button>
+    <div class="assessor-picker">
+      <span>Assessor -</span>
+      <select id="assessorSelect">
+        <option value="">Select…</option>
+        <option value="Trevor">Trevor</option>
+        <option value="Stephanie">Stephanie</option>
+        <option value="Devyn">Devyn</option>
+      </select>
+    </div>
   </div>
 </header>
 
@@ -323,6 +334,18 @@ const roomMeasurementsEl = $('roomMeasurements');
 const roomMeasureEmpty = $('roomMeasureEmpty');
 const moodBox = $('moodBox');
 const moodEmoji = $('moodEmoji');
+const assessorSelect = $('assessorSelect');
+let currentAssessor = '';
+
+function sendAssessorName() {
+  if (ws && ws.readyState === WebSocket.OPEN) {
+    ws.send(JSON.stringify({ type: 'assessor-name', name: currentAssessor }));
+  }
+}
+assessorSelect.addEventListener('change', () => {
+  currentAssessor = assessorSelect.value;
+  sendAssessorName();
+});
 
 let ws, pc, roomId, localStream = null;
 let arStep = 0; // UI-only hint counter; homeowner side is the source of truth
@@ -371,6 +394,7 @@ function connectWS() {
       const offer = await pc.createOffer();
       await pc.setLocalDescription(offer);
       ws.send(JSON.stringify({ type: 'offer', sdp: pc.localDescription }));
+      sendAssessorName();
     } else if (msg.type === 'peer-left' && msg.role === 'homeowner') {
       setStatus('Homeowner disconnected', false);
       remoteVideo.srcObject = null;
