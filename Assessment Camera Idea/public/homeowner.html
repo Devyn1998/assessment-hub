@@ -74,6 +74,23 @@
   }
   #resultCard .big { font-size:26px; font-weight:700; margin:4px 0; }
   #freezeCanvas { position:absolute; inset:0; width:100%; height:100%; object-fit:cover; display:none; z-index:5; background:#000; }
+
+  #moodModal {
+    position:fixed; inset:0; z-index:60; background:rgba(0,0,0,.72);
+    display:flex; align-items:center; justify-content:center; padding:24px;
+  }
+  #moodModal .mood-card {
+    background:#17181c; border-radius:16px; padding:28px 22px; text-align:center; max-width:360px; width:100%;
+  }
+  #moodModal .mood-title { font-size:16px; font-weight:600; margin-bottom:20px; color:#fff; }
+  #moodModal .mood-options { display:flex; justify-content:center; gap:16px; }
+  .mood-btn {
+    width:76px; height:76px; border-radius:50%; font-size:34px; display:flex; align-items:center; justify-content:center;
+    border:3px solid transparent; background:#222; -webkit-tap-highlight-color:transparent;
+  }
+  .mood-btn.sad { border-color:#e0722a; background:rgba(224,114,42,.15); }
+  .mood-btn.meh { border-color:#e0c22a; background:rgba(224,194,42,.15); }
+  .mood-btn.happy { border-color:#3ecf5f; background:rgba(62,207,95,.15); }
 </style>
 </head>
 <body>
@@ -96,6 +113,17 @@
     <div class="big" id="resultBig">—</div>
     <div class="row" style="margin-top:10px;">
       <button class="secondary" id="resultCloseBtn">Close</button>
+    </div>
+  </div>
+
+  <div id="moodModal">
+    <div class="mood-card">
+      <div class="mood-title">How are you feeling about today's visit?</div>
+      <div class="mood-options">
+        <button class="mood-btn sad" data-mood="sad" data-emoji="😞">😞</button>
+        <button class="mood-btn meh" data-mood="meh" data-emoji="😐">😐</button>
+        <button class="mood-btn happy" data-mood="happy" data-emoji="😊">😊</button>
+      </div>
     </div>
   </div>
 
@@ -180,6 +208,25 @@ function startHomeownerSpeechRecognition() {
     console.warn('Speech recognition unavailable', e);
   }
 }
+
+// ---------- Mood picker (shown right away, sent to the assessor once picked) ----------
+const moodModal = $('moodModal');
+let pendingMood = null;
+
+function trySendMood() {
+  if (pendingMood && ws.readyState === WebSocket.OPEN) {
+    ws.send(JSON.stringify({ type: 'customer-mood', mood: pendingMood.mood, emoji: pendingMood.emoji }));
+    pendingMood = null;
+  }
+}
+document.querySelectorAll('.mood-btn').forEach((btn) => {
+  btn.addEventListener('click', () => {
+    pendingMood = { mood: btn.dataset.mood, emoji: btn.dataset.emoji };
+    trySendMood();
+    moodModal.style.display = 'none';
+  });
+});
+ws.addEventListener('open', trySendMood);
 
 // ---------- Promo banner (marquee, 2 min in, 20s duration, repeats every 10 min) ----------
 let callStarted = false;

@@ -122,6 +122,16 @@
   .tag-btn { padding:3px 8px; font-size:10.5px; background:#2a2d34; color:#ccc; border-radius:10px; }
   .tag-btn.active { background:#1e6fe0; color:#fff; }
   .tag-missing { font-size:10.5px; color:#e0a13a; margin-top:6px; }
+
+  #moodBox {
+    display:flex; align-items:center; gap:10px; background:#1f2128; border:1px solid #2b2e36;
+    border-radius:9px; padding:8px 14px;
+  }
+  #moodBox .mood-box-label { font-size:11px; color:#9a9ca3; line-height:1.3; }
+  #moodBox .mood-box-emoji { font-size:24px; line-height:1; }
+  #moodBox.mood-sad { border-color:#e0722a; background:rgba(224,114,42,.12); }
+  #moodBox.mood-meh { border-color:#e0c22a; background:rgba(224,194,42,.12); }
+  #moodBox.mood-happy { border-color:#3ecf5f; background:rgba(62,207,95,.12); }
 </style>
 </head>
 <body>
@@ -151,6 +161,10 @@
     <div class="video-controls">
       <button id="camBtn" class="secondary">Enable My Camera/Mic</button>
       <button id="muteBtn" class="secondary" disabled>Mute Mic</button>
+      <div id="moodBox">
+        <span class="mood-box-label">Customer's<br>Mood</span>
+        <span class="mood-box-emoji" id="moodEmoji">—</span>
+      </div>
     </div>
   </div>
 
@@ -281,6 +295,8 @@ const roomSelect = $('roomSelect');
 const roomCustomInput = $('roomCustomInput');
 const roomMeasurementsEl = $('roomMeasurements');
 const roomMeasureEmpty = $('roomMeasureEmpty');
+const moodBox = $('moodBox');
+const moodEmoji = $('moodEmoji');
 
 let ws, pc, roomId, localStream = null;
 let arStep = 0; // UI-only hint counter; homeowner side is the source of truth
@@ -370,6 +386,10 @@ function connectWS() {
       }
     } else if (msg.type === 'speech-transcript') {
       matchChecklist(msg.text, 'homeowner');
+    } else if (msg.type === 'customer-mood') {
+      moodEmoji.textContent = msg.emoji || '—';
+      moodBox.classList.remove('mood-sad', 'mood-meh', 'mood-happy');
+      if (msg.mood) moodBox.classList.add('mood-' + msg.mood);
     }
   });
 }
@@ -579,7 +599,11 @@ const DEFAULT_CHECKLIST = [
 
 let checklistCounter = 0;
 // state: 'pending' | 'checked' | 'skipped' | 'na'
-const checklist = DEFAULT_CHECKLIST.map((item) => ({
+// Sorted alphabetically by section, then by item label within each section.
+const checklist = DEFAULT_CHECKLIST
+  .slice()
+  .sort((a, b) => a.section.localeCompare(b.section) || a.label.localeCompare(b.label))
+  .map((item) => ({
   id: ++checklistCounter,
   section: item.section,
   label: item.label,
