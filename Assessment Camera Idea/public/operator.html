@@ -122,9 +122,23 @@
 
   /* Digital-display look for the scrolling checklist */
   #checklistItems {
-    font-family:'Courier New', Consolas, monospace; background:#050705;
+    font-family:'Courier New', Consolas, monospace;
+    background:#050705 repeating-linear-gradient(0deg, rgba(255,255,255,.025) 0px, rgba(255,255,255,.025) 1px, transparent 1px, transparent 3px);
     border:1px solid #1c2a1c; border-radius:10px; padding:10px 12px;
     height:420px; overflow-y:auto; scrollbar-width:thin;
+    position:relative;
+  }
+  #checklistItems::before {
+    content:""; position:absolute; inset:0; pointer-events:none; z-index:5; border-radius:10px;
+    background-image:url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg'><filter id='n'><feTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='2' stitchTiles='stitch'/></filter><rect width='100%25' height='100%25' filter='url(%23n)'/></svg>");
+    mix-blend-mode:overlay; animation:clCrackle 0.5s steps(3) infinite;
+  }
+  @keyframes clCrackle {
+    0% { opacity:.14; }
+    30% { opacity:.24; }
+    55% { opacity:.09; }
+    80% { opacity:.2; }
+    100% { opacity:.14; }
   }
   .cl-section { font-size:10px; text-transform:uppercase; letter-spacing:.12em; color:#3f5a3f; margin:14px 0 6px; }
   .cl-section:first-child { margin-top:0; }
@@ -781,7 +795,7 @@ function clPauseAutoScroll() {
 setInterval(() => {
   if (clAutoScrollPaused) return;
   if (checklistItemsEl.scrollHeight <= checklistItemsEl.clientHeight) return;
-  checklistItemsEl.scrollTop += 0.6;
+  checklistItemsEl.scrollTop += 0.69;
   if (checklistItemsEl.scrollTop + checklistItemsEl.clientHeight >= checklistItemsEl.scrollHeight - 1) {
     checklistItemsEl.scrollTop = 0;
   }
