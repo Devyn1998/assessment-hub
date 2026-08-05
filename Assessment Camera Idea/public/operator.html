@@ -63,6 +63,14 @@
 
   #listenBtn { width:100%; margin-bottom:10px; }
   #listenBtn.on { background:#1a7a3a; }
+  #roomSelect { width:100%; padding:9px; border-radius:8px; border:1px solid #333; background:#0d0e11; color:#eee; font-size:13px; }
+  #roomCustomInput { width:100%; padding:9px; border-radius:8px; border:1px solid #333; background:#0d0e11; color:#eee; font-size:13px; margin-top:6px; display:none; }
+  #roomMeasurements { max-height:160px; overflow:auto; margin-top:6px; margin-bottom:4px; }
+  .room-group { background:#0d0e11; border:1px solid #262a31; border-radius:8px; padding:8px; margin-bottom:8px; }
+  .room-group .room-name { font-size:11.5px; font-weight:700; color:#8ab4ff; margin-bottom:4px; }
+  .room-group .room-line { font-size:11.5px; color:#ccc; display:flex; justify-content:space-between; padding:2px 0; }
+  .room-group .room-line .rl-label { color:#999; }
+  .room-group .room-line.unlabeled .rl-label { color:#c0392b; }
   #checklistReminder {
     display:none; background:#3a2a0d; border:1px solid #6b4a12; color:#ffd38a;
     border-radius:8px; padding:8px 10px; font-size:12px; margin-bottom:10px;
@@ -110,7 +118,34 @@
 
 <div id="layout">
   <div class="panel" id="checklistPanel">
-    <h2>Assessment Checklist</h2>
+    <h2>Room</h2>
+    <select id="roomSelect">
+      <option value="">Select room…</option>
+      <option>Master Bedroom</option>
+      <option>Bedroom</option>
+      <option>Upstairs Bedroom</option>
+      <option>Downstairs Bedroom</option>
+      <option>Kitchen</option>
+      <option>Living Room</option>
+      <option>Family Room</option>
+      <option>Dining Room</option>
+      <option>Bathroom</option>
+      <option>Basement</option>
+      <option>Attic</option>
+      <option>Garage</option>
+      <option>Hallway</option>
+      <option>Office/Den</option>
+      <option>Sunroom</option>
+      <option value="__custom">Other (type name)…</option>
+    </select>
+    <input id="roomCustomInput" placeholder="Custom room name" />
+
+    <h2 style="margin-top:14px;">Room Measurements</h2>
+    <div id="roomMeasurements">
+      <div id="roomMeasureEmpty" class="hint" style="margin:0;">Pick a room above, then measure as usual — results show here grouped by room.</div>
+    </div>
+
+    <h2 style="margin-top:14px;">Assessment Checklist</h2>
     <button id="listenBtn" class="secondary">Start Listening</button>
     <p class="hint" style="margin-top:-6px;">Uses your browser's built-in speech recognition — free, no account, but it's keyword matching, not true understanding. Check items manually any time.</p>
     <div id="checklistReminder"></div>
@@ -227,6 +262,10 @@ const endAssessmentBtn = $('endAssessmentBtn');
 const listenBtn = $('listenBtn');
 const checklistItemsEl = $('checklistItems');
 const checklistReminderEl = $('checklistReminder');
+const roomSelect = $('roomSelect');
+const roomCustomInput = $('roomCustomInput');
+const roomMeasurementsEl = $('roomMeasurements');
+const roomMeasureEmpty = $('roomMeasureEmpty');
 
 let ws, pc, roomId, localStream = null;
 let arStep = 0; // UI-only hint counter; homeowner side is the source of truth
@@ -235,6 +274,7 @@ let measurementLog = [];
 let sessionPhotos = [];
 let pendingMeasurePhoto = null;
 let photoCounter = 0;
+let currentRoom = '';
 
 function setStatus(text, live) {
   statusText.textContent = text;
@@ -378,8 +418,9 @@ $('newBtn').addEventListener('click', () => {
 const MEASURE_TAGS = ['Width', 'Height', 'Ceiling Height', 'Wall Length'];
 
 function addMeasurement(msg) {
-  const entry = { ...msg, time: Date.now(), userLabel: '' };
+  const entry = { ...msg, time: Date.now(), userLabel: '', room: currentRoom || 'Unassigned' };
   measurementLog.push(entry);
+  renderRoomMeasurements();
   empty.remove();
   const card = document.createElement('div');
   card.className = 'measure-card';
@@ -406,6 +447,7 @@ function addMeasurement(msg) {
       entry.userLabel = tag;
       tagRow.querySelectorAll('.tag-btn').forEach((b) => b.classList.toggle('active', b === btn));
       tagMissing.style.display = 'none';
+      renderRoomMeasurements();
     });
     tagRow.appendChild(btn);
   });
@@ -420,9 +462,50 @@ function formatMeters(m) {
   return { feet: ft, inches: inch, label: `${ft}' ${inch}"`, meters: Math.round(m * 100) / 100 };
 }
 
+// ---------- Room selector (label only — never ends the session/AR) ----------
+roomSelect.addEventListener('change', () => {
+  if (roomSelect.value === '__custom') {
+    roomCustomInput.style.display = 'block';
+    roomCustomInput.focus();
+    currentRoom = roomCustomInput.value.trim();
+  } else {
+    roomCustomInput.style.display = 'none';
+    currentRoom = roomSelect.value;
+  }
+});
+roomCustomInput.addEventListener('input', () => {
+  currentRoom = roomCustomInput.value.trim();
+});
+
+function renderRoomMeasurements() {
+  if (!measurementLog.length) {
+    roomMeasurementsEl.innerHTML = '';
+    roomMeasurementsEl.appendChild(roomMeasureEmpty);
+    return;
+  }
+  const groups = {};
+  measurementLog.forEach((m) => {
+    const room = m.room || 'Unassigned';
+    if (!groups[room]) groups[room] = [];
+    groups[room].push(m);
+  });
+  roomMeasurementsEl.innerHTML = '';
+  Object.keys(groups).forEach((room) => {
+    const div = document.createElement('div');
+    div.className = 'room-group';
+    const lines = groups[room].map((m) => {
+      const labelText = m.userLabel || (m.mode === 'ar' ? 'AR measurement' : 'Photo estimate');
+      const unlabeled = !m.userLabel;
+      return `<div class="room-line${unlabeled ? ' unlabeled' : ''}"><span class="rl-label">${escapeHtml(labelText)}</span><span>${escapeHtml(m.label || '')}</span></div>`;
+    }).join('');
+    div.innerHTML = `<div class="room-name">${escapeHtml(room)}</div>${lines}`;
+    roomMeasurementsEl.appendChild(div);
+  });
+}
+
 // ---------- Photo memory bank ----------
 function addGalleryPhoto(dataUrl, mode) {
-  const entry = { id: ++photoCounter, dataUrl, time: new Date(), description: '', mode, measurement: null };
+  const entry = { id: ++photoCounter, dataUrl, time: new Date(), description: '', mode, measurement: null, room: currentRoom || 'Unassigned' };
   sessionPhotos.push(entry);
   if (photoEmpty && photoEmpty.parentNode) photoEmpty.remove();
 
@@ -430,7 +513,7 @@ function addGalleryPhoto(dataUrl, mode) {
   div.className = 'photo-entry';
   div.innerHTML = `
     <img src="${dataUrl}" />
-    <div class="photo-time">${entry.time.toLocaleTimeString()}${mode === 'measure' ? ' · Measurement photo' : ''}</div>
+    <div class="photo-time">${escapeHtml(entry.room)} · ${entry.time.toLocaleTimeString()}${mode === 'measure' ? ' · Measurement photo' : ''}</div>
     <div class="photo-measure" style="display:none;"></div>
     <textarea class="photo-desc" placeholder="Add a description…"></textarea>
   `;
@@ -624,14 +707,29 @@ function buildAndDownloadReport() {
   const photosHtml = sortedPhotos.map((p) => `
     <div style="background:#f7f7f7;border:1px solid #ddd;border-radius:10px;padding:12px;margin-bottom:16px;">
       <img src="${p.dataUrl}" style="max-width:100%;border-radius:6px;display:block;margin-bottom:8px;" />
-      <div style="font-size:12px;color:#666;">${p.time.toLocaleString()}${p.mode === 'measure' ? ' · Measurement photo' : ''}</div>
+      <div style="font-size:12px;color:#666;">${escapeHtml(p.room || 'Unassigned')} · ${p.time.toLocaleString()}${p.mode === 'measure' ? ' · Measurement photo' : ''}</div>
       ${p.measurement ? `<div style="font-weight:700;color:#1e6fe0;margin-top:4px;">Measured: ${escapeHtml(p.measurement.label)} (${p.measurement.distanceMeters} m)</div>` : ''}
       ${p.description ? `<div style="margin-top:8px;white-space:pre-wrap;">${escapeHtml(p.description)}</div>` : '<div style="margin-top:8px;color:#999;font-style:italic;">No description added.</div>'}
     </div>
   `).join('');
 
+  const roomGroups = {};
+  measurementLog.forEach((m) => {
+    const room = m.room || 'Unassigned';
+    if (!roomGroups[room]) roomGroups[room] = [];
+    roomGroups[room].push(m);
+  });
+  const roomsHtml = Object.keys(roomGroups).length
+    ? Object.keys(roomGroups).map((room) => `
+      <div style="margin-bottom:14px;">
+        <div style="font-weight:700; margin-bottom:4px;">${escapeHtml(room)}</div>
+        <ul>${roomGroups[room].map((m) => `<li>${m.userLabel ? `<strong>${escapeHtml(m.userLabel)}:</strong> ` : ''}${escapeHtml(m.label || '')} (${m.distanceMeters} m)${!m.userLabel ? ' <span style="color:#c0392b;">(unlabeled)</span>' : ''}</li>`).join('')}</ul>
+      </div>
+    `).join('')
+    : '<p style="color:#999;">No measurements recorded.</p>';
+
   const measurementsHtml = measurementLog.length
-    ? measurementLog.map((m) => `<li>${m.userLabel ? `<strong>${escapeHtml(m.userLabel)}:</strong> ` : ''}${m.mode === 'ar' ? 'AR Measurement' : 'Photo Estimate'} — <strong>${escapeHtml(m.label || '')}</strong> (${m.distanceMeters} m) — ${new Date(m.time).toLocaleTimeString()}${!m.userLabel ? ' <span style="color:#c0392b;">(unlabeled)</span>' : ''}</li>`).join('')
+    ? measurementLog.map((m) => `<li>${m.userLabel ? `<strong>${escapeHtml(m.userLabel)}:</strong> ` : ''}${m.mode === 'ar' ? 'AR Measurement' : 'Photo Estimate'} — <strong>${escapeHtml(m.label || '')}</strong> (${m.distanceMeters} m) — ${escapeHtml(m.room || 'Unassigned')} — ${new Date(m.time).toLocaleTimeString()}${!m.userLabel ? ' <span style="color:#c0392b;">(unlabeled)</span>' : ''}</li>`).join('')
     : '<li style="color:#999;">No measurements recorded.</li>';
 
   const stateLabels = { checked: 'Checked', skipped: 'Skipped', na: 'N/A', pending: 'Not covered' };
@@ -657,7 +755,9 @@ function buildAndDownloadReport() {
   <div class="meta">Customer: ${escapeHtml(customerName)} &nbsp;·&nbsp; Assessment date: ${now.toLocaleString()}</div>
   <h2>Checklist</h2>
   <ul>${checklistHtml}</ul>
-  <h2>Measurements</h2>
+  <h2>Measurements by Room</h2>
+  ${roomsHtml}
+  <h2>All Measurements (chronological)</h2>
   <ul>${measurementsHtml}</ul>
   <h2>Photos (${sortedPhotos.length})</h2>
   ${photosHtml || '<p style="color:#999;">No photos captured.</p>'}
