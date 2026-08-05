@@ -11,9 +11,9 @@
   body { margin:0; background:#0b0c0f; color:#eee; font-family:-apple-system,system-ui,Segoe UI,Roboto,sans-serif; }
   header { padding:14px 20px; border-bottom:1px solid #222; display:flex; align-items:center; gap:16px; flex-wrap:wrap; }
   header h1 { font-size:16px; margin:0; font-weight:700; }
-  #jobInfoWrap { max-width:1400px; margin:16px auto 0; padding:0 16px; }
-  #layout { display:grid; grid-template-columns: 280px 1fr 340px; gap:16px; padding:16px; max-width:1400px; margin:0 auto; align-items:start; }
-  @media (max-width: 1100px) { #layout { grid-template-columns: 1fr; } }
+  #jobInfoWrap { max-width:1560px; margin:16px auto 0; padding:0 16px; }
+  #layout { display:grid; grid-template-columns: 260px 1fr 260px 340px; gap:16px; padding:16px; max-width:1560px; margin:0 auto; align-items:start; }
+  @media (max-width: 1400px) { #layout { grid-template-columns: 1fr; } }
   .panel { background:#15171b; border:1px solid #222; border-radius:12px; padding:14px; }
   #videoWrap { position:relative; width:100%; aspect-ratio:16/9; background:#000; border-radius:10px; overflow:hidden; }
   #remoteVideo { width:100%; height:100%; object-fit:cover; background:#000; }
@@ -53,13 +53,39 @@
   #jobInfoPanel label { font-size:11px; color:#999; display:block; margin-bottom:4px; }
   #jobInfoPanel input { width:100%; padding:10px; border-radius:8px; border:1px solid #333; background:#0d0e11; color:#eee; font-size:13px; }
 
-  #sidebarPanel { display:flex; flex-direction:column; max-height:calc(100vh - 110px); position:sticky; top:16px; }
+  #sidebarPanel, #checklistPanel { display:flex; flex-direction:column; max-height:calc(100vh - 110px); position:sticky; top:16px; }
   #photoGallery { overflow:auto; flex:1; min-height:0; margin-top:2px; }
   .photo-entry { background:#0d0e11; border:1px solid #262a31; border-radius:10px; padding:8px; margin-bottom:12px; }
   .photo-entry img { width:100%; border-radius:6px; display:block; margin-bottom:6px; }
   .photo-time { font-size:11px; color:#888; margin-bottom:4px; }
   .photo-measure { font-size:12px; color:#8ab4ff; font-weight:600; margin-bottom:6px; }
   .photo-desc { width:100%; min-height:52px; resize:vertical; padding:6px; border-radius:6px; border:1px solid #333; background:#15171b; color:#eee; font-size:12px; font-family:inherit; }
+
+  #listenBtn { width:100%; margin-bottom:10px; }
+  #listenBtn.on { background:#1a7a3a; }
+  #checklistReminder {
+    display:none; background:#3a2a0d; border:1px solid #6b4a12; color:#ffd38a;
+    border-radius:8px; padding:8px 10px; font-size:12px; margin-bottom:10px;
+  }
+  #checklistReminder button { background:none; border:0; color:#ffd38a; text-decoration:underline; padding:0; font-size:11px; margin-top:4px; }
+  #checklistItems { overflow:auto; flex:1; min-height:0; }
+  .cl-section { font-size:10px; text-transform:uppercase; letter-spacing:.05em; color:#666; margin:14px 0 6px; }
+  .cl-section:first-child { margin-top:0; }
+  .cl-item { border-bottom:1px solid #1e2126; padding:7px 0; }
+  .cl-item .cl-label { font-size:12.5px; display:block; }
+  .cl-item.checked .cl-label { color:#3ecf5f; }
+  .cl-item.skipped .cl-label { color:#666; text-decoration:line-through; }
+  .cl-item.na .cl-label { color:#8a8a5c; font-style:italic; }
+  .cl-auto-tag { font-size:10px; color:#8ab4ff; display:block; margin-top:2px; }
+  .cl-toggles { display:flex; gap:5px; margin-top:5px; }
+  .cl-toggle { padding:3px 9px; font-size:10.5px; font-weight:600; background:#22252c; color:#999; border-radius:12px; }
+  .cl-toggle.active-checked { background:#1a7a3a; color:#fff; }
+  .cl-toggle.active-skipped { background:#4a2a2a; color:#fff; }
+  .cl-toggle.active-na { background:#4a4a2a; color:#fff; }
+  .tag-row { display:flex; gap:5px; margin-top:8px; flex-wrap:wrap; }
+  .tag-btn { padding:3px 8px; font-size:10.5px; background:#2a2d34; color:#ccc; border-radius:10px; }
+  .tag-btn.active { background:#1e6fe0; color:#fff; }
+  .tag-missing { font-size:10.5px; color:#e0a13a; margin-top:6px; }
 </style>
 </head>
 <body>
@@ -83,6 +109,14 @@
 </div>
 
 <div id="layout">
+  <div class="panel" id="checklistPanel">
+    <h2>Assessment Checklist</h2>
+    <button id="listenBtn" class="secondary">Start Listening</button>
+    <p class="hint" style="margin-top:-6px;">Uses your browser's built-in speech recognition — free, no account, but it's keyword matching, not true understanding. Check items manually any time.</p>
+    <div id="checklistReminder"></div>
+    <div id="checklistItems"></div>
+  </div>
+
   <div class="panel" id="sidebarPanel">
     <h2>Photo Memory Bank</h2>
     <button id="takePhotoBtn" class="secondary" style="margin-bottom:12px;">Take Photo</button>
@@ -190,6 +224,9 @@ const photoEmpty = $('photoEmpty');
 const customerNameInput = $('customerNameInput');
 const addressInput = $('addressInput');
 const endAssessmentBtn = $('endAssessmentBtn');
+const listenBtn = $('listenBtn');
+const checklistItemsEl = $('checklistItems');
+const checklistReminderEl = $('checklistReminder');
 
 let ws, pc, roomId, localStream = null;
 let arStep = 0; // UI-only hint counter; homeowner side is the source of truth
@@ -202,6 +239,10 @@ let photoCounter = 0;
 function setStatus(text, live) {
   statusText.textContent = text;
   dot.classList.toggle('live', !!live);
+  if (live && !checklistTimerStarted) {
+    checklistTimerStarted = true;
+    scheduleChecklistReminder(5 * 60 * 1000);
+  }
 }
 
 async function newSession() {
@@ -272,6 +313,8 @@ function connectWS() {
         pendingMeasurePhoto = addGalleryPhoto(msg.image, 'measure');
         showReceivedPhoto(msg.image);
       }
+    } else if (msg.type === 'speech-transcript') {
+      matchChecklist(msg.text, 'homeowner');
     }
   });
 }
@@ -332,8 +375,11 @@ $('newBtn').addEventListener('click', () => {
   newSession();
 });
 
+const MEASURE_TAGS = ['Width', 'Height', 'Ceiling Height', 'Wall Length'];
+
 function addMeasurement(msg) {
-  measurementLog.push({ ...msg, time: Date.now() });
+  const entry = { ...msg, time: Date.now(), userLabel: '' };
+  measurementLog.push(entry);
   empty.remove();
   const card = document.createElement('div');
   card.className = 'measure-card';
@@ -342,13 +388,29 @@ function addMeasurement(msg) {
     <div class="mode">${modeLabel} · ${new Date().toLocaleTimeString()}</div>
     <div class="val">${msg.label || ''}</div>
     <div class="sub">${msg.distanceMeters ? msg.distanceMeters + ' m' : ''}</div>
+    <div class="tag-row"></div>
+    <div class="tag-missing">Needs a label — tap one above</div>
   `;
   if (msg.thumb) {
     const img = document.createElement('img');
     img.src = msg.thumb;
     card.appendChild(img);
   }
+  const tagRow = card.querySelector('.tag-row');
+  const tagMissing = card.querySelector('.tag-missing');
+  MEASURE_TAGS.forEach((tag) => {
+    const btn = document.createElement('button');
+    btn.className = 'tag-btn';
+    btn.textContent = tag;
+    btn.addEventListener('click', () => {
+      entry.userLabel = tag;
+      tagRow.querySelectorAll('.tag-btn').forEach((b) => b.classList.toggle('active', b === btn));
+      tagMissing.style.display = 'none';
+    });
+    tagRow.appendChild(btn);
+  });
   log.prepend(card);
+  return entry;
 }
 
 function formatMeters(m) {
@@ -387,6 +449,159 @@ takePhotoBtn.addEventListener('click', () => {
   setTimeout(() => { takePhotoBtn.textContent = 'Take Photo'; takePhotoBtn.disabled = false; }, 4000);
 });
 
+// ---------- Assessment checklist (topic-level, keyword auto-check) ----------
+const DEFAULT_CHECKLIST = [
+  { section: 'Site & General Info', label: 'Property basics confirmed (address, year built, housing type, occupants, sqft)', keywords: ['year built','square foot','square feet','sq ft','how many people live','occupants','rent or own','own or rent','housing type'] },
+  { section: 'Base/Crawl Space', label: 'Crawlspace walls & ceiling assessed', keywords: ['crawlspace','crawl space','crawl-space','foundation wall'] },
+  { section: 'Base/Crawl Space', label: 'Vapor barrier condition checked', keywords: ['vapor barrier'] },
+  { section: 'Base/Crawl Space', label: 'Basement/bulkhead door sealing checked', keywords: ['bulkhead','basement door'] },
+  { section: 'Base/Crawl Space', label: 'Dryer vent hose checked', keywords: ['dryer vent','dryer hose'] },
+  { section: 'Attic', label: 'Attic insulation type/condition assessed (unfloored/floored/cathedral/walls)', keywords: ['attic insulation','unfloored','floored attic','cathedral','attic condition','batts','blown in','blown-in'] },
+  { section: 'Attic', label: 'Attic access & damming reviewed', keywords: ['attic access','damming','dam'] },
+  { section: 'Attic', label: 'Attic recessed lights & bath fans checked', keywords: ['recessed light','recessed can','bath fan','bathroom fan'] },
+  { section: 'Attic Cap', label: 'Heat sources identified & air-sealing needs noted', keywords: ['heat source','air seal','air-seal'] },
+  { section: 'Attic Cap', label: 'Attic cap ventilation & insulation spec reviewed', keywords: ['attic cap','low headroom'] },
+  { section: 'Kneewall', label: 'Kneewall slope/gable/floor/wall framing assessed', keywords: ['knee wall','kneewall','gable'] },
+  { section: 'Kneewall', label: 'Kneewall ventilation checked', keywords: ['kneewall vent','knee wall vent'] },
+  { section: 'Ductwork', label: 'Ductwork insulation status checked', keywords: ['duct insulation','ducts insulated','ductwork'] },
+  { section: 'Ductwork', label: 'Duct length/sqft and insulation spec discussed', keywords: ['duct length','duct square','linear feet of duct'] },
+  { section: 'Walls & Garage', label: 'Exterior wall framing & siding assessed', keywords: ['siding','wall framing','exterior wall'] },
+  { section: 'Walls & Garage', label: 'Garage wall & ceiling assessed', keywords: ['garage wall','garage ceiling'] },
+  { section: 'Walls & Garage', label: 'Blower door test discussed', keywords: ['blower door'] },
+  { section: 'Health & Safety', label: 'Knob & tube wiring', keywords: ['knob and tube','knob & tube','k and t wiring'] },
+  { section: 'Health & Safety', label: 'Asbestos', keywords: ['asbestos'] },
+  { section: 'Health & Safety', label: 'Vermiculite', keywords: ['vermiculite'] },
+  { section: 'Health & Safety', label: 'Moisture', keywords: ['moisture','water damage','leak'] },
+  { section: 'Health & Safety', label: 'Mold (>100 sqft)', keywords: ['mold'] },
+  { section: 'Health & Safety', label: 'Structural concern', keywords: ['structural concern','structural issue','structural damage'] },
+  { section: 'Health & Safety', label: 'Combustion safety', keywords: ['combustion safety','combustion'] },
+  { section: 'Health & Safety', label: 'CO detector present', keywords: ['carbon monoxide','co detector'] },
+  { section: 'Health & Safety', label: 'Missing insulation areas noted', keywords: ['missing insulation','no insulation'] },
+];
+
+let checklistCounter = 0;
+// state: 'pending' | 'checked' | 'skipped' | 'na'
+const checklist = DEFAULT_CHECKLIST.map((item) => ({
+  id: ++checklistCounter,
+  section: item.section,
+  label: item.label,
+  keywords: item.keywords,
+  state: 'pending',
+  auto: false,
+  matchedPhrase: '',
+}));
+
+let checklistTimerStarted = false;
+
+function setChecklistState(item, newState) {
+  item.state = item.state === newState ? 'pending' : newState; // click again to undo
+  if (item.state !== 'checked') { item.auto = false; item.matchedPhrase = ''; }
+  renderChecklist();
+}
+
+function renderChecklist() {
+  checklistItemsEl.innerHTML = '';
+  let lastSection = null;
+  checklist.forEach((item) => {
+    if (item.section !== lastSection) {
+      lastSection = item.section;
+      const h = document.createElement('div');
+      h.className = 'cl-section';
+      h.textContent = item.section;
+      checklistItemsEl.appendChild(h);
+    }
+    const row = document.createElement('div');
+    row.className = 'cl-item' + (item.state !== 'pending' ? ' ' + item.state : '');
+    row.innerHTML = `
+      <span class="cl-label">${escapeHtml(item.label)}</span>
+      ${item.auto ? `<span class="cl-auto-tag">Auto-detected: heard "${escapeHtml(item.matchedPhrase)}"</span>` : ''}
+      <div class="cl-toggles">
+        <button class="cl-toggle${item.state === 'checked' ? ' active-checked' : ''}" data-state="checked">Done</button>
+        <button class="cl-toggle${item.state === 'skipped' ? ' active-skipped' : ''}" data-state="skipped">Skip</button>
+        <button class="cl-toggle${item.state === 'na' ? ' active-na' : ''}" data-state="na">N/A</button>
+      </div>
+    `;
+    row.querySelectorAll('.cl-toggle').forEach((btn) => {
+      btn.addEventListener('click', () => setChecklistState(item, btn.dataset.state));
+    });
+    checklistItemsEl.appendChild(row);
+  });
+}
+renderChecklist();
+
+function matchChecklist(text, source) {
+  if (!text) return;
+  const lower = text.toLowerCase();
+  let anyMatched = false;
+  checklist.forEach((item) => {
+    if (item.state !== 'pending') return;
+    const hit = item.keywords.find((k) => lower.includes(k));
+    if (hit) {
+      item.state = 'checked';
+      item.auto = true;
+      item.matchedPhrase = text.length > 80 ? text.slice(0, 80) + '…' : text;
+      anyMatched = true;
+    }
+  });
+  if (anyMatched) renderChecklist();
+}
+
+function scheduleChecklistReminder(delay) {
+  setTimeout(() => {
+    showChecklistReminder();
+    scheduleChecklistReminder(5 * 60 * 1000);
+  }, delay);
+}
+
+function showChecklistReminder() {
+  const outstanding = checklist.filter((i) => i.state === 'pending');
+  if (!outstanding.length) { checklistReminderEl.style.display = 'none'; return; }
+  const names = outstanding.slice(0, 5).map((i) => i.label).join('; ');
+  const more = outstanding.length > 5 ? ` (+${outstanding.length - 5} more)` : '';
+  checklistReminderEl.innerHTML = `Still outstanding: ${escapeHtml(names)}${more}<br><button id="dismissReminderBtn">Dismiss</button>`;
+  checklistReminderEl.style.display = 'block';
+  $('dismissReminderBtn').addEventListener('click', () => { checklistReminderEl.style.display = 'none'; });
+}
+
+// ---------- Speech recognition (assessor's own mic, browser-native) ----------
+let recognition = null;
+let recognitionActive = false;
+
+function toggleListening() {
+  const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+  if (!SR) {
+    alert('Speech recognition is not supported in this browser. Try Chrome on desktop.');
+    return;
+  }
+  if (recognitionActive) {
+    recognitionActive = false;
+    if (recognition) { try { recognition.stop(); } catch (e) {} }
+    listenBtn.textContent = 'Start Listening';
+    listenBtn.classList.remove('on');
+    return;
+  }
+  recognition = new SR();
+  recognition.continuous = true;
+  recognition.interimResults = false;
+  recognition.lang = 'en-US';
+  recognition.onresult = (e) => {
+    for (let i = e.resultIndex; i < e.results.length; i++) {
+      if (e.results[i].isFinal) {
+        matchChecklist(e.results[i][0].transcript, 'assessor');
+      }
+    }
+  };
+  recognition.onerror = (e) => { console.warn('speech recognition error', e.error); };
+  recognition.onend = () => {
+    if (recognitionActive) { try { recognition.start(); } catch (e) {} } // Chrome auto-stops periodically; restart while toggled on
+  };
+  recognitionActive = true;
+  listenBtn.textContent = 'Stop Listening';
+  listenBtn.classList.add('on');
+  try { recognition.start(); } catch (e) { console.warn(e); }
+}
+listenBtn.addEventListener('click', toggleListening);
+
 // ---------- Job export ----------
 function escapeHtml(str) {
   return String(str).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -416,8 +631,15 @@ function buildAndDownloadReport() {
   `).join('');
 
   const measurementsHtml = measurementLog.length
-    ? measurementLog.map((m) => `<li>${m.mode === 'ar' ? 'AR Measurement' : 'Photo Estimate'} — <strong>${escapeHtml(m.label || '')}</strong> (${m.distanceMeters} m) — ${new Date(m.time).toLocaleTimeString()}</li>`).join('')
+    ? measurementLog.map((m) => `<li>${m.userLabel ? `<strong>${escapeHtml(m.userLabel)}:</strong> ` : ''}${m.mode === 'ar' ? 'AR Measurement' : 'Photo Estimate'} — <strong>${escapeHtml(m.label || '')}</strong> (${m.distanceMeters} m) — ${new Date(m.time).toLocaleTimeString()}${!m.userLabel ? ' <span style="color:#c0392b;">(unlabeled)</span>' : ''}</li>`).join('')
     : '<li style="color:#999;">No measurements recorded.</li>';
+
+  const stateLabels = { checked: 'Checked', skipped: 'Skipped', na: 'N/A', pending: 'Not covered' };
+  const stateColors = { checked: '#1e7a3a', skipped: '#999', na: '#8a7a1e', pending: '#c0392b' };
+  const checklistHtml = checklist.map((i) => {
+    const stateText = i.state === 'checked' && i.auto ? 'Checked (auto-detected)' : stateLabels[i.state];
+    return `<li><strong>[${i.section}]</strong> ${escapeHtml(i.label)} — <span style="color:${stateColors[i.state]};font-weight:600;">${stateText}</span></li>`;
+  }).join('');
 
   const html = `<!doctype html>
 <html><head><meta charset="utf-8"><title>Assessment Report — ${escapeHtml(address)}</title>
@@ -428,10 +650,13 @@ function buildAndDownloadReport() {
   .meta { color:#666; font-size:13px; margin-bottom:24px; }
   h2 { font-size:16px; border-bottom:2px solid #eee; padding-bottom:6px; margin-top:32px; }
   ul { padding-left:20px; }
+  li { margin-bottom:4px; }
 </style>
 </head><body><div class="wrap">
   <h1>${escapeHtml(address)}</h1>
   <div class="meta">Customer: ${escapeHtml(customerName)} &nbsp;·&nbsp; Assessment date: ${now.toLocaleString()}</div>
+  <h2>Checklist</h2>
+  <ul>${checklistHtml}</ul>
   <h2>Measurements</h2>
   <ul>${measurementsHtml}</ul>
   <h2>Photos (${sortedPhotos.length})</h2>
@@ -464,7 +689,7 @@ dropPinBtn.addEventListener('click', () => {
   if (!ws || !arHitOk) return;
   ws.send(JSON.stringify({ type: 'remote-drop-pin' }));
   arStep++;
-  dropPinBtn.textContent = arStep >= 1 ? 'Drop Pin (2nd wall)' : 'Drop Pin';
+  dropPinBtn.textContent = arStep >= 1 ? 'Drop Pin (2nd point)' : 'Drop Pin';
   if (arStep >= 2) {
     // The homeowner's side computes + logs the measurement itself once
     // both points are set; just reset our local hint state here.

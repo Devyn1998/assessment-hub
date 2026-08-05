@@ -143,6 +143,41 @@ function setStatus(text, live) {
   if (live && !callStarted) {
     callStarted = true;
     scheduleBanner(2 * 60 * 1000); // first appearance at 2 minutes in
+    startHomeownerSpeechRecognition();
+  }
+}
+
+// ---------- Speech transcript feed for the assessor's checklist ----------
+// Browser-native speech recognition (Chrome only — silently does nothing
+// on Safari/iOS since that API isn't supported there). Transcribes the
+// homeowner's own mic locally and forwards finished phrases to the
+// operator, who matches them against the assessment checklist.
+function startHomeownerSpeechRecognition() {
+  const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+  if (!SR) return; // not supported on this browser/device — skip quietly
+  try {
+    const recog = new SR();
+    recog.continuous = true;
+    recog.interimResults = false;
+    recog.lang = 'en-US';
+    recog.onresult = (e) => {
+      for (let i = e.resultIndex; i < e.results.length; i++) {
+        if (e.results[i].isFinal) {
+          const text = e.results[i][0].transcript;
+          if (text && text.trim() && ws.readyState === WebSocket.OPEN) {
+            ws.send(JSON.stringify({ type: 'speech-transcript', text }));
+          }
+        }
+      }
+    };
+    recog.onerror = () => {};
+    recog.onend = () => {
+      // Chrome stops recognition periodically on its own; keep it going for the call.
+      try { recog.start(); } catch (e) {}
+    };
+    recog.start();
+  } catch (e) {
+    console.warn('Speech recognition unavailable', e);
   }
 }
 
@@ -375,15 +410,19 @@ function placeARPoint() {
   if (!xrHitPose) return;
   if (!arPoint1) {
     arPoint1 = { ...xrHitPose };
-    measureBanner.textContent = 'First point set. Walk/pan toward the opposite wall.';
+    measureBanner.textContent = 'First point set. Walk/pan toward the next point.';
   } else {
     const p2 = xrHitPose;
     const dx = p2.x - arPoint1.x, dy = p2.y - arPoint1.y, dz = p2.z - arPoint1.z;
     const dist = Math.sqrt(dx * dx + dy * dy + dz * dz);
     const f = formatMeters(dist);
-    showResult('Wall-to-wall (AR)', f.label, `${f.meters} m`);
+    showResult('AR Measurement', f.label, `${f.meters} m`);
     sendMeasurement({ mode: 'ar', distanceMeters: f.meters, label: f.label });
-    endAR(false);
+    // Session stays live so multiple measurements (width, height, ceiling,
+    // more walls) can be taken back to back — the assessor ends it with
+    // "End AR" once they're done with this room, not after every pair.
+    arPoint1 = null;
+    measureBanner.textContent = 'Measurement logged. Aim at the next point when your assessor is ready for another.';
   }
 }
 
