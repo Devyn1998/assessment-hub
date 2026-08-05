@@ -104,14 +104,26 @@
     border-radius:8px; padding:8px 10px; font-size:12px; margin-bottom:10px;
   }
   #checklistReminder button { background:none; border:0; color:#ffd38a; text-decoration:underline; padding:0; font-size:11px; margin-top:4px; }
-  .cl-section { font-size:10px; text-transform:uppercase; letter-spacing:.05em; color:#666; margin:14px 0 6px; }
+
+  #checklistSearch {
+    width:100%; padding:9px 11px; border-radius:8px; border:1px solid #2b2e36;
+    background:#0d0e12; color:#eee; font-size:13px; margin-bottom:10px;
+  }
+
+  /* Digital-display look for the scrolling checklist */
+  #checklistItems {
+    font-family:'Courier New', Consolas, monospace; background:#050705;
+    border:1px solid #1c2a1c; border-radius:10px; padding:10px 12px;
+    height:420px; overflow-y:auto; scrollbar-width:thin;
+  }
+  .cl-section { font-size:10px; text-transform:uppercase; letter-spacing:.12em; color:#3f5a3f; margin:14px 0 6px; }
   .cl-section:first-child { margin-top:0; }
-  .cl-item { border-bottom:1px solid #1e2126; padding:7px 0; }
-  .cl-item .cl-label { font-size:12.5px; display:block; }
-  .cl-item.checked .cl-label { color:#3ecf5f; }
-  .cl-item.skipped .cl-label { color:#666; text-decoration:line-through; }
-  .cl-item.na .cl-label { color:#8a8a5c; font-style:italic; }
-  .cl-auto-tag { font-size:10px; color:#8ab4ff; display:block; margin-top:2px; }
+  .cl-item { border-bottom:1px solid #10190f; padding:7px 0; }
+  .cl-item .cl-label { font-size:12.5px; display:block; color:#8fae8f; }
+  .cl-item.checked .cl-label { color:#3ecf5f; text-shadow:0 0 6px rgba(62,207,95,.55); }
+  .cl-item.skipped .cl-label { color:#a5605f; text-decoration:line-through; }
+  .cl-item.na .cl-label { color:#c9a227; text-shadow:0 0 4px rgba(201,162,39,.4); font-style:italic; }
+  .cl-auto-tag { font-size:10px; color:#6fa0d8; display:block; margin-top:2px; }
   .cl-toggles { display:flex; gap:5px; margin-top:5px; }
   .cl-toggle { padding:3px 9px; font-size:10.5px; font-weight:600; background:#22252c; color:#999; border-radius:12px; }
   .cl-toggle.active-checked { background:#1a7a3a; color:#fff; }
@@ -252,6 +264,7 @@
       <button id="listenBtn" class="secondary">Start Listening</button>
       <p class="hint">Uses your browser's built-in speech recognition — free, no account, but it's keyword matching, not true understanding. Check items manually any time.</p>
       <div id="checklistReminder"></div>
+      <input id="checklistSearch" placeholder="Search checklist…" />
       <div id="checklistItems"></div>
     </div>
   </div>
@@ -291,6 +304,7 @@ const endAssessmentBtn = $('endAssessmentBtn');
 const listenBtn = $('listenBtn');
 const checklistItemsEl = $('checklistItems');
 const checklistReminderEl = $('checklistReminder');
+const checklistSearchEl = $('checklistSearch');
 const roomSelect = $('roomSelect');
 const roomCustomInput = $('roomCustomInput');
 const roomMeasurementsEl = $('roomMeasurements');
@@ -622,10 +636,28 @@ function setChecklistState(item, newState) {
   renderChecklist();
 }
 
+let checklistSearchTerm = '';
+checklistSearchEl.addEventListener('input', () => {
+  checklistSearchTerm = checklistSearchEl.value;
+  renderChecklist();
+});
+
 function renderChecklist() {
   checklistItemsEl.innerHTML = '';
+  const term = checklistSearchTerm.trim().toLowerCase();
+  const visible = term
+    ? checklist.filter((i) => i.label.toLowerCase().includes(term) || i.section.toLowerCase().includes(term))
+    : checklist;
+  if (!visible.length) {
+    const none = document.createElement('div');
+    none.className = 'hint';
+    none.style.margin = '0';
+    none.textContent = 'No checklist items match "' + checklistSearchEl.value + '".';
+    checklistItemsEl.appendChild(none);
+    return;
+  }
   let lastSection = null;
-  checklist.forEach((item) => {
+  visible.forEach((item) => {
     if (item.section !== lastSection) {
       lastSection = item.section;
       const h = document.createElement('div');
@@ -653,6 +685,26 @@ function renderChecklist() {
   });
 }
 renderChecklist();
+
+// ---------- Continuous auto-scroll (digital-board style), pauses while you interact ----------
+let clAutoScrollPaused = false;
+let clResumeTimer = null;
+function clPauseAutoScroll() {
+  clAutoScrollPaused = true;
+  clearTimeout(clResumeTimer);
+  clResumeTimer = setTimeout(() => { clAutoScrollPaused = false; }, 3000);
+}
+['wheel', 'touchstart', 'mousedown', 'mouseenter'].forEach((evt) => {
+  checklistItemsEl.addEventListener(evt, clPauseAutoScroll, { passive: true });
+});
+setInterval(() => {
+  if (clAutoScrollPaused) return;
+  if (checklistItemsEl.scrollHeight <= checklistItemsEl.clientHeight) return;
+  checklistItemsEl.scrollTop += 0.6;
+  if (checklistItemsEl.scrollTop + checklistItemsEl.clientHeight >= checklistItemsEl.scrollHeight - 1) {
+    checklistItemsEl.scrollTop = 0;
+  }
+}, 40);
 
 function matchChecklist(text, source) {
   if (!text) return;
