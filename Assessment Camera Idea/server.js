@@ -33,6 +33,10 @@ app.get('/api/new-room', (req, res) => {
   res.json({ roomId: id });
 });
 
+app.get('/', (req, res) => {
+  res.redirect('/operator');
+});
+
 app.get('/operator', (req, res) => {
   res.sendFile(path.join(__dirname, 'public', 'operator.html'));
 });
