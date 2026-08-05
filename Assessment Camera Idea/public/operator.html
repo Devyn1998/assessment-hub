@@ -105,10 +105,18 @@
   }
   #checklistReminder button { background:none; border:0; color:#ffd38a; text-decoration:underline; padding:0; font-size:11px; margin-top:4px; }
 
+  #checklistSearchWrap { position:relative; margin-bottom:10px; }
   #checklistSearch {
     width:100%; padding:9px 11px; border-radius:8px; border:1px solid #2b2e36;
-    background:#0d0e12; color:#eee; font-size:13px; margin-bottom:10px;
+    background:#0d0e12; color:#eee; font-size:13px;
   }
+  #checklistSuggest {
+    display:none; position:absolute; left:0; right:0; top:100%; z-index:10; margin-top:4px;
+    background:#1a1c22; border:1px solid #2b2e36; border-radius:8px; overflow:hidden;
+    max-height:220px; overflow-y:auto;
+  }
+  #checklistSuggest div { padding:8px 11px; font-size:12.5px; color:#ddd; cursor:pointer; }
+  #checklistSuggest div:hover { background:#2a2d34; }
 
   /* Digital-display look for the scrolling checklist */
   #checklistItems {
@@ -264,7 +272,10 @@
       <button id="listenBtn" class="secondary">Start Listening</button>
       <p class="hint">Uses your browser's built-in speech recognition — free, no account, but it's keyword matching, not true understanding. Check items manually any time.</p>
       <div id="checklistReminder"></div>
-      <input id="checklistSearch" placeholder="Search checklist…" />
+      <div id="checklistSearchWrap">
+        <input id="checklistSearch" placeholder="Search checklist…" autocomplete="off" />
+        <div id="checklistSuggest"></div>
+      </div>
       <div id="checklistItems"></div>
     </div>
   </div>
@@ -305,6 +316,7 @@ const listenBtn = $('listenBtn');
 const checklistItemsEl = $('checklistItems');
 const checklistReminderEl = $('checklistReminder');
 const checklistSearchEl = $('checklistSearch');
+const checklistSuggestEl = $('checklistSuggest');
 const roomSelect = $('roomSelect');
 const roomCustomInput = $('roomCustomInput');
 const roomMeasurementsEl = $('roomMeasurements');
@@ -637,9 +649,54 @@ function setChecklistState(item, newState) {
 }
 
 let checklistSearchTerm = '';
+
+function getChecklistSuggestions(term) {
+  if (!term) return [];
+  const t = term.toLowerCase();
+  const seen = new Set();
+  const results = [];
+  checklist.forEach((item) => {
+    if (seen.has(item.label)) return;
+    const words = item.label.toLowerCase().split(/[^a-z0-9]+/);
+    if (words.some((w) => w.startsWith(t))) {
+      seen.add(item.label);
+      results.push(item.label);
+    }
+  });
+  return results.slice(0, 6);
+}
+
+function renderChecklistSuggestions() {
+  const term = checklistSearchEl.value.trim();
+  const suggestions = getChecklistSuggestions(term);
+  if (!term || !suggestions.length) {
+    checklistSuggestEl.style.display = 'none';
+    checklistSuggestEl.innerHTML = '';
+    return;
+  }
+  checklistSuggestEl.innerHTML = suggestions.map((s) => `<div data-value="${escapeHtml(s)}">${escapeHtml(s)}</div>`).join('');
+  checklistSuggestEl.style.display = 'block';
+  checklistSuggestEl.querySelectorAll('div').forEach((el) => {
+    el.addEventListener('mousedown', (e) => {
+      e.preventDefault(); // keep focus so blur doesn't hide the list before the click registers
+      checklistSearchEl.value = el.dataset.value;
+      checklistSearchTerm = el.dataset.value;
+      checklistSuggestEl.style.display = 'none';
+      renderChecklist();
+    });
+  });
+}
+
 checklistSearchEl.addEventListener('input', () => {
   checklistSearchTerm = checklistSearchEl.value;
   renderChecklist();
+  renderChecklistSuggestions();
+});
+checklistSearchEl.addEventListener('focus', () => {
+  if (checklistSearchEl.value.trim()) renderChecklistSuggestions();
+});
+checklistSearchEl.addEventListener('blur', () => {
+  setTimeout(() => { checklistSuggestEl.style.display = 'none'; }, 150);
 });
 
 function renderChecklist() {
