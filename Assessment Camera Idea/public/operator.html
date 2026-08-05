@@ -8,75 +8,102 @@
 <style>
   :root { color-scheme: dark; }
   * { box-sizing: border-box; }
-  body { margin:0; background:#0b0c0f; color:#eee; font-family:-apple-system,system-ui,Segoe UI,Roboto,sans-serif; }
-  header { padding:14px 20px; border-bottom:1px solid #222; display:flex; align-items:center; gap:16px; flex-wrap:wrap; }
-  header h1 { font-size:16px; margin:0; font-weight:700; }
-  #jobInfoWrap { max-width:1560px; margin:16px auto 0; padding:0 16px; }
-  #layout { display:grid; grid-template-columns: 260px 1fr 260px 340px; gap:16px; padding:16px; max-width:1560px; margin:0 auto; align-items:start; }
-  @media (max-width: 1400px) { #layout { grid-template-columns: 1fr; } }
-  .panel { background:#15171b; border:1px solid #222; border-radius:12px; padding:14px; }
-  #videoWrap { position:relative; width:100%; aspect-ratio:16/9; background:#000; border-radius:10px; overflow:hidden; }
+  body { margin:0; background:#0a0b0d; color:#e8e8ea; font-family:-apple-system,system-ui,Segoe UI,Roboto,sans-serif; font-size:14px; }
+
+  header {
+    position:sticky; top:0; z-index:50; background:#121317; border-bottom:1px solid #23262d;
+    padding:12px 20px; display:flex; align-items:center; justify-content:space-between; gap:16px; flex-wrap:wrap;
+  }
+  .header-left { display:flex; align-items:center; gap:16px; }
+  header h1 { font-size:15px; margin:0; font-weight:700; letter-spacing:-.01em; }
+  #status { display:flex; align-items:center; gap:6px; font-size:12px; color:#9a9ca3; }
+  .dot { width:7px; height:7px; border-radius:50%; background:#e5484d; }
+  .dot.live { background:#30c85e; }
+  .header-right { display:flex; align-items:center; gap:8px; flex-wrap:wrap; }
+  .header-input { padding:9px 11px; border-radius:8px; border:1px solid #2b2e36; background:#0d0e12; color:#eee; font-size:12.5px; width:160px; }
+  .header-input.wide { width:230px; }
+
+  main { max-width:1400px; margin:0 auto; padding:20px; display:grid; grid-template-columns: 1fr 400px; gap:20px; align-items:start; }
+  @media (max-width: 1050px) { main { grid-template-columns: 1fr; } }
+
+  button { border:0; border-radius:9px; padding:10px 16px; font-size:13px; font-weight:600; background:#2f7dfa; color:#fff; cursor:pointer; }
+  button:hover { filter:brightness(1.08); }
+  button.secondary { background:#1f2128; color:#d8d9dd; border:1px solid #2b2e36; }
+  button:disabled { opacity:.35; cursor:default; }
+
+  h2, .section-title { font-size:11.5px; text-transform:uppercase; letter-spacing:.06em; color:#8b8d94; margin:18px 0 8px; }
+  .section-title:first-child, h2:first-child { margin-top:0; }
+  .hint { font-size:12px; color:#8b8d94; margin:8px 0 0; line-height:1.5; }
+
+  /* ---- Video column ---- */
+  .video-col { display:flex; flex-direction:column; gap:14px; }
+  .link-bar { display:flex; gap:8px; align-items:center; background:#14161b; border:1px solid #23262d; border-radius:12px; padding:12px 14px; }
+  .link-bar input { flex:1; padding:9px 10px; border-radius:8px; border:1px solid #2b2e36; background:#0d0e12; color:#eee; font-size:12.5px; }
+  #videoWrap { position:relative; width:100%; aspect-ratio:16/9; background:#000; border-radius:14px; overflow:hidden; border:1px solid #23262d; }
   #remoteVideo { width:100%; height:100%; object-fit:cover; background:#000; }
-  #selfBox { position:absolute; bottom:12px; right:12px; width:130px; height:96px; border-radius:8px; overflow:hidden; border:2px solid rgba(255,255,255,.7); background:#111; }
+  #selfBox { position:absolute; bottom:14px; right:14px; width:140px; height:100px; border-radius:10px; overflow:hidden; border:2px solid rgba(255,255,255,.65); background:#111; }
   #selfBox video { width:100%; height:100%; object-fit:cover; }
-  #linkRow { display:flex; gap:8px; align-items:center; }
-  #linkRow input { flex:1; padding:10px; border-radius:8px; border:1px solid #333; background:#0d0e11; color:#eee; font-size:13px; }
-  button { border:0; border-radius:8px; padding:10px 14px; font-size:13px; font-weight:600; background:#1e6fe0; color:#fff; cursor:pointer; }
-  button.secondary { background:#2a2d34; color:#ddd; }
-  button:disabled { opacity:.4; cursor:default; }
-  #status { display:flex; align-items:center; gap:6px; font-size:12px; color:#aaa; }
-  .dot { width:8px; height:8px; border-radius:50%; background:#e33; }
-  .dot.live { background:#3ecf5f; }
-  h2 { font-size:13px; text-transform:uppercase; letter-spacing:.06em; color:#999; margin:0 0 10px; }
-  #log { display:flex; flex-direction:column; gap:10px; max-height:70vh; overflow:auto; }
+  .video-controls { display:flex; gap:8px; }
+
+  /* ---- Side column: room bar + tabs + panel ---- */
+  .side-col { display:flex; flex-direction:column; position:sticky; top:80px; max-height:calc(100vh - 100px); }
+  .room-bar { background:#14161b; border:1px solid #23262d; border-radius:12px 12px 0 0; border-bottom:0; padding:12px 14px; }
+  .room-bar label { font-size:10.5px; text-transform:uppercase; letter-spacing:.06em; color:#8b8d94; display:block; margin-bottom:6px; }
+  #roomSelect { width:100%; padding:9px 10px; border-radius:8px; border:1px solid #2b2e36; background:#0d0e12; color:#eee; font-size:13px; }
+  #roomCustomInput { width:100%; padding:9px 10px; border-radius:8px; border:1px solid #2b2e36; background:#0d0e12; color:#eee; font-size:13px; margin-top:6px; display:none; }
+
+  .tabs { display:flex; background:#14161b; border-left:1px solid #23262d; border-right:1px solid #23262d; padding:4px; gap:4px; }
+  .tab-btn { flex:1; background:transparent; color:#9a9ca3; padding:9px 6px; font-size:12.5px; font-weight:600; border-radius:8px; }
+  .tab-btn.active { background:#2a2d34; color:#fff; }
+
+  .tab-panel {
+    background:#14161b; border:1px solid #23262d; border-top:0; border-radius:0 0 12px 12px;
+    padding:16px; flex:1; min-height:0; overflow:auto;
+  }
+
+  #log { display:flex; flex-direction:column; gap:10px; }
   .measure-card { background:#0d0e11; border:1px solid #262a31; border-radius:10px; padding:10px; }
   .measure-card .mode { font-size:11px; color:#8ab4ff; text-transform:uppercase; letter-spacing:.05em; }
   .measure-card .val { font-size:22px; font-weight:700; margin:2px 0; }
   .measure-card .sub { font-size:11px; color:#888; }
   .measure-card img { width:100%; border-radius:6px; margin-top:8px; display:block; }
   #empty, #photoEmpty { color:#666; font-size:13px; text-align:center; padding:20px 0; }
-  code { background:#0d0e11; padding:2px 6px; border-radius:4px; }
-  .hint { font-size:12px; color:#999; margin:0 0 10px; }
+
   .indicator { display:inline-flex; align-items:center; gap:6px; font-size:12px; color:#aaa; margin-bottom:10px; }
   .indicator .idot { width:8px; height:8px; border-radius:50%; background:#555; }
   .indicator .idot.on { background:#3ecf5f; }
   .indicator .idot.off { background:#e33; }
+  #arRemoteRow { display:flex; gap:8px; margin-bottom:14px; }
+
   #photoWrap { position:relative; width:100%; background:#000; border-radius:10px; overflow:hidden; display:none; margin-top:10px; }
   #photoWrap img { width:100%; display:block; }
   #photoOverlay { position:absolute; inset:0; width:100%; height:100%; cursor:crosshair; }
   #opCalibForm { display:none; background:#0d0e11; border:1px solid #262a31; border-radius:8px; padding:10px; margin-top:10px; }
   #opCalibForm input { width:100%; padding:8px; border-radius:6px; border:1px solid #333; background:#15171b; color:#eee; font-size:14px; margin:6px 0; }
   #opCalibForm select { width:100%; padding:8px; border-radius:6px; border:1px solid #333; background:#15171b; color:#eee; font-size:14px; }
+  #photoCancelRow { display:none; gap:8px; margin-top:8px; }
 
-  #jobInfoPanel { display:flex; gap:12px; flex-wrap:wrap; align-items:flex-end; }
-  #jobInfoPanel .field { flex:1; min-width:200px; }
-  #jobInfoPanel label { font-size:11px; color:#999; display:block; margin-bottom:4px; }
-  #jobInfoPanel input { width:100%; padding:10px; border-radius:8px; border:1px solid #333; background:#0d0e11; color:#eee; font-size:13px; }
-
-  #sidebarPanel, #checklistPanel { display:flex; flex-direction:column; max-height:calc(100vh - 110px); position:sticky; top:16px; }
-  #photoGallery { overflow:auto; flex:1; min-height:0; margin-top:2px; }
+  #photoGallery { display:flex; flex-direction:column; }
   .photo-entry { background:#0d0e11; border:1px solid #262a31; border-radius:10px; padding:8px; margin-bottom:12px; }
   .photo-entry img { width:100%; border-radius:6px; display:block; margin-bottom:6px; }
   .photo-time { font-size:11px; color:#888; margin-bottom:4px; }
   .photo-measure { font-size:12px; color:#8ab4ff; font-weight:600; margin-bottom:6px; }
   .photo-desc { width:100%; min-height:52px; resize:vertical; padding:6px; border-radius:6px; border:1px solid #333; background:#15171b; color:#eee; font-size:12px; font-family:inherit; }
 
-  #listenBtn { width:100%; margin-bottom:10px; }
+  #listenBtn { width:100%; }
   #listenBtn.on { background:#1a7a3a; }
-  #roomSelect { width:100%; padding:9px; border-radius:8px; border:1px solid #333; background:#0d0e11; color:#eee; font-size:13px; }
-  #roomCustomInput { width:100%; padding:9px; border-radius:8px; border:1px solid #333; background:#0d0e11; color:#eee; font-size:13px; margin-top:6px; display:none; }
-  #roomMeasurements { max-height:160px; overflow:auto; margin-top:6px; margin-bottom:4px; }
+  #roomMeasurements { margin-top:6px; margin-bottom:4px; }
   .room-group { background:#0d0e11; border:1px solid #262a31; border-radius:8px; padding:8px; margin-bottom:8px; }
   .room-group .room-name { font-size:11.5px; font-weight:700; color:#8ab4ff; margin-bottom:4px; }
   .room-group .room-line { font-size:11.5px; color:#ccc; display:flex; justify-content:space-between; padding:2px 0; }
   .room-group .room-line .rl-label { color:#999; }
   .room-group .room-line.unlabeled .rl-label { color:#c0392b; }
+
   #checklistReminder {
     display:none; background:#3a2a0d; border:1px solid #6b4a12; color:#ffd38a;
     border-radius:8px; padding:8px 10px; font-size:12px; margin-bottom:10px;
   }
   #checklistReminder button { background:none; border:0; color:#ffd38a; text-decoration:underline; padding:0; font-size:11px; margin-top:4px; }
-  #checklistItems { overflow:auto; flex:1; min-height:0; }
   .cl-section { font-size:10px; text-transform:uppercase; letter-spacing:.05em; color:#666; margin:14px 0 6px; }
   .cl-section:first-child { margin-top:0; }
   .cl-item { border-bottom:1px solid #1e2126; padding:7px 0; }
@@ -98,135 +125,122 @@
 </head>
 <body>
 <header>
-  <h1>Assessment HUD</h1>
-  <div id="status"><span class="dot" id="dot"></span><span id="statusText">Starting…</span></div>
+  <div class="header-left">
+    <h1>Assessment HUD</h1>
+    <div id="status"><span class="dot" id="dot"></span><span id="statusText">Starting…</span></div>
+  </div>
+  <div class="header-right">
+    <input id="customerNameInput" class="header-input" placeholder="Customer name" />
+    <input id="addressInput" class="header-input wide" placeholder="Address" />
+    <button id="endAssessmentBtn">End &amp; Export</button>
+  </div>
 </header>
 
-<div id="jobInfoWrap">
-  <div class="panel" id="jobInfoPanel">
-    <div class="field">
-      <label>Customer Name</label>
-      <input id="customerNameInput" placeholder="Jane Doe" />
+<main>
+  <div class="video-col">
+    <div class="link-bar">
+      <input id="linkInput" readonly value="Generating…" />
+      <button id="copyBtn">Copy</button>
+      <button id="newBtn" class="secondary">New Session</button>
     </div>
-    <div class="field" style="flex:2;">
-      <label>Address</label>
-      <input id="addressInput" placeholder="123 Main St, Springfield" />
+    <div id="videoWrap">
+      <video id="remoteVideo" autoplay playsinline></video>
+      <div id="selfBox"><video id="selfVideo" autoplay playsinline muted></video></div>
     </div>
-    <button id="endAssessmentBtn">End Assessment &amp; Export</button>
-  </div>
-</div>
-
-<div id="layout">
-  <div class="panel" id="checklistPanel">
-    <h2>Room</h2>
-    <select id="roomSelect">
-      <option value="">Select room…</option>
-      <option>Master Bedroom</option>
-      <option>Bedroom</option>
-      <option>Upstairs Bedroom</option>
-      <option>Downstairs Bedroom</option>
-      <option>Kitchen</option>
-      <option>Living Room</option>
-      <option>Family Room</option>
-      <option>Dining Room</option>
-      <option>Bathroom</option>
-      <option>Basement</option>
-      <option>Attic</option>
-      <option>Garage</option>
-      <option>Hallway</option>
-      <option>Office/Den</option>
-      <option>Sunroom</option>
-      <option value="__custom">Other (type name)…</option>
-    </select>
-    <input id="roomCustomInput" placeholder="Custom room name" />
-
-    <h2 style="margin-top:14px;">Room Measurements</h2>
-    <div id="roomMeasurements">
-      <div id="roomMeasureEmpty" class="hint" style="margin:0;">Pick a room above, then measure as usual — results show here grouped by room.</div>
-    </div>
-
-    <h2 style="margin-top:14px;">Assessment Checklist</h2>
-    <button id="listenBtn" class="secondary">Start Listening</button>
-    <p class="hint" style="margin-top:-6px;">Uses your browser's built-in speech recognition — free, no account, but it's keyword matching, not true understanding. Check items manually any time.</p>
-    <div id="checklistReminder"></div>
-    <div id="checklistItems"></div>
-  </div>
-
-  <div class="panel" id="sidebarPanel">
-    <h2>Photo Memory Bank</h2>
-    <button id="takePhotoBtn" class="secondary" style="margin-bottom:12px;">Take Photo</button>
-    <div id="photoGallery">
-      <div id="photoEmpty">No photos yet. Use "Take Photo" or measure a wall to start building the record.</div>
+    <div class="video-controls">
+      <button id="camBtn" class="secondary">Enable My Camera/Mic</button>
+      <button id="muteBtn" class="secondary" disabled>Mute Mic</button>
     </div>
   </div>
 
-  <div>
-    <div class="panel">
-      <h2>Homeowner link</h2>
-      <div id="linkRow">
-        <input id="linkInput" readonly value="Generating…" />
-        <button id="copyBtn">Copy</button>
-        <button id="newBtn" class="secondary">New Session</button>
-      </div>
-    </div>
-    <div class="panel" style="margin-top:16px;">
-      <h2>Homeowner camera</h2>
-      <div id="videoWrap">
-        <video id="remoteVideo" autoplay playsinline></video>
-        <div id="selfBox"><video id="selfVideo" autoplay playsinline muted></video></div>
-      </div>
-      <div style="margin-top:10px; display:flex; gap:8px;">
-        <button id="camBtn" class="secondary">Enable My Camera/Mic</button>
-        <button id="muteBtn" class="secondary" disabled>Mute Mic</button>
-      </div>
-    </div>
-  </div>
-
-  <div>
-  <div class="panel">
-    <h2>Measure remotely</h2>
-    <p class="hint">You control the pins — the homeowner just aims the camera.</p>
-
-    <div class="indicator" id="arIndicatorRow" style="display:none;">
-      <span class="idot" id="arDot"></span><span id="arIndicatorText">AR not started on their end</span>
-    </div>
-    <div id="arRemoteRow" style="display:none; gap:8px; margin-bottom:14px; display:none;">
-      <button id="dropPinBtn" disabled>Drop Pin</button>
-      <button id="resetArBtn" class="secondary">Reset</button>
-      <button id="endArBtn" class="secondary">End AR</button>
-    </div>
-
-    <div style="display:flex; gap:8px;">
-      <button id="capturePhotoBtn" class="secondary">Capture Photo to Measure</button>
-    </div>
-
-    <div id="photoWrap">
-      <img id="photoImg" />
-      <canvas id="photoOverlay"></canvas>
-    </div>
-    <div id="opCalibForm">
-      <div style="font-size:13px;">Real-world length of the yellow line:</div>
-      <input id="opCalibInput" type="number" step="0.1" placeholder="e.g. 36" />
-      <select id="opCalibUnit">
-        <option value="in">inches</option>
-        <option value="ft">feet</option>
+  <div class="side-col">
+    <div class="room-bar">
+      <label>Room</label>
+      <select id="roomSelect">
+        <option value="">Select room…</option>
+        <option>Master Bedroom</option>
+        <option>Bedroom</option>
+        <option>Upstairs Bedroom</option>
+        <option>Downstairs Bedroom</option>
+        <option>Kitchen</option>
+        <option>Living Room</option>
+        <option>Family Room</option>
+        <option>Dining Room</option>
+        <option>Bathroom</option>
+        <option>Basement</option>
+        <option>Attic</option>
+        <option>Garage</option>
+        <option>Hallway</option>
+        <option>Office/Den</option>
+        <option>Sunroom</option>
+        <option value="__custom">Other (type name)…</option>
       </select>
-      <div style="display:flex; margin-top:8px; gap:8px;">
-        <button class="secondary" id="opCalibCancelBtn">Cancel</button>
-        <button id="opCalibConfirmBtn">Use this</button>
+      <input id="roomCustomInput" placeholder="Custom room name" />
+    </div>
+
+    <div class="tabs">
+      <button class="tab-btn active" data-tab="measure">Measure</button>
+      <button class="tab-btn" data-tab="checklist">Checklist</button>
+      <button class="tab-btn" data-tab="photos">Photos</button>
+    </div>
+
+    <div class="tab-panel" id="tab-measure">
+      <div class="indicator" id="arIndicatorRow" style="display:none;">
+        <span class="idot" id="arDot"></span><span id="arIndicatorText">AR not started on their end</span>
+      </div>
+      <div id="arRemoteRow" style="display:none;">
+        <button id="dropPinBtn" disabled>Drop Pin</button>
+        <button id="resetArBtn" class="secondary">Reset</button>
+        <button id="endArBtn" class="secondary">End AR</button>
+      </div>
+
+      <button id="capturePhotoBtn" class="secondary" style="width:100%;">Capture Photo to Measure</button>
+      <p class="hint">Homeowner aims the camera — you control the pins and photo capture. Switching rooms above never ends this session.</p>
+
+      <div id="photoWrap">
+        <img id="photoImg" />
+        <canvas id="photoOverlay"></canvas>
+      </div>
+      <div id="opCalibForm">
+        <div style="font-size:13px;">Real-world length of the yellow line:</div>
+        <input id="opCalibInput" type="number" step="0.1" placeholder="e.g. 36" />
+        <select id="opCalibUnit">
+          <option value="in">inches</option>
+          <option value="ft">feet</option>
+        </select>
+        <div style="display:flex; margin-top:8px; gap:8px;">
+          <button class="secondary" id="opCalibCancelBtn">Cancel</button>
+          <button id="opCalibConfirmBtn">Use this</button>
+        </div>
+      </div>
+      <div id="photoCancelRow">
+        <button class="secondary" id="cancelPhotoBtn">Cancel Photo Measure</button>
+      </div>
+
+      <div class="section-title">Room Measurements</div>
+      <div id="roomMeasurements">
+        <div id="roomMeasureEmpty" class="hint" style="margin:0;">Pick a room above, then measure as usual — results show here grouped by room.</div>
+      </div>
+
+      <div class="section-title">All Measurements</div>
+      <div id="log"><div id="empty">No measurements yet. Have the homeowner tap "Enable AR" once (one-time local tap), then drive pins and photo capture from the controls above.</div></div>
+    </div>
+
+    <div class="tab-panel" id="tab-checklist" style="display:none;">
+      <button id="listenBtn" class="secondary">Start Listening</button>
+      <p class="hint">Uses your browser's built-in speech recognition — free, no account, but it's keyword matching, not true understanding. Check items manually any time.</p>
+      <div id="checklistReminder"></div>
+      <div id="checklistItems"></div>
+    </div>
+
+    <div class="tab-panel" id="tab-photos" style="display:none;">
+      <button id="takePhotoBtn" class="secondary" style="width:100%;">Take Photo</button>
+      <div id="photoGallery" style="margin-top:12px;">
+        <div id="photoEmpty">No photos yet. Use "Take Photo" or measure a wall to start building the record.</div>
       </div>
     </div>
-    <div id="photoCancelRow" style="gap:8px; margin-top:8px; display:none;">
-      <button class="secondary" id="cancelPhotoBtn">Cancel Photo Measure</button>
-    </div>
   </div>
-
-  <div class="panel" style="margin-top:16px;">
-    <h2>Measurements</h2>
-    <div id="log"><div id="empty">No measurements yet. Have the homeowner tap "Enable AR" once (one-time local tap), then drive pins and photo capture from the controls above.</div></div>
-  </div>
-  </div>
-</div>
+</main>
 
 <script>
 const $ = (id) => document.getElementById(id);
@@ -922,6 +936,16 @@ $('cancelPhotoBtn').addEventListener('click', () => {
   opCalibForm.style.display = 'none';
   if (ws) ws.send(JSON.stringify({ type: 'remote-photo-done' }));
   pendingMeasurePhoto = null;
+});
+
+// ---------- Tab switching ----------
+document.querySelectorAll('.tab-btn').forEach((btn) => {
+  btn.addEventListener('click', () => {
+    document.querySelectorAll('.tab-btn').forEach((b) => b.classList.remove('active'));
+    document.querySelectorAll('.tab-panel').forEach((p) => { p.style.display = 'none'; });
+    btn.classList.add('active');
+    $('tab-' + btn.dataset.tab).style.display = 'block';
+  });
 });
 
 newSession();
