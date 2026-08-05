@@ -194,9 +194,8 @@
     </div>
 
     <div class="tabs">
-      <button class="tab-btn active" data-tab="measure">Measure</button>
+      <button class="tab-btn active" data-tab="measure">Measures + Photos</button>
       <button class="tab-btn" data-tab="checklist">Checklist</button>
-      <button class="tab-btn" data-tab="photos">Photos</button>
     </div>
 
     <div class="tab-panel" id="tab-measure">
@@ -209,7 +208,10 @@
         <button id="endArBtn" class="secondary">End AR</button>
       </div>
 
-      <button id="capturePhotoBtn" class="secondary" style="width:100%;">Capture Photo to Measure</button>
+      <div style="display:flex; gap:8px;">
+        <button id="takePhotoBtn" class="secondary" style="flex:1;">Take Photo</button>
+        <button id="capturePhotoBtn" class="secondary" style="flex:1;">Capture Photo to Measure</button>
+      </div>
       <p class="hint">Homeowner aims the camera — you control the pins and photo capture. Switching rooms above never ends this session.</p>
 
       <div id="photoWrap">
@@ -239,6 +241,11 @@
 
       <div class="section-title">All Measurements</div>
       <div id="log"><div id="empty">No measurements yet. Have the homeowner tap "Enable AR" once (one-time local tap), then drive pins and photo capture from the controls above.</div></div>
+
+      <div class="section-title">Photo Memory Bank</div>
+      <div id="photoGallery">
+        <div id="photoEmpty">No photos yet. Use "Take Photo" or measure a wall to start building the record.</div>
+      </div>
     </div>
 
     <div class="tab-panel" id="tab-checklist" style="display:none;">
@@ -246,13 +253,6 @@
       <p class="hint">Uses your browser's built-in speech recognition — free, no account, but it's keyword matching, not true understanding. Check items manually any time.</p>
       <div id="checklistReminder"></div>
       <div id="checklistItems"></div>
-    </div>
-
-    <div class="tab-panel" id="tab-photos" style="display:none;">
-      <button id="takePhotoBtn" class="secondary" style="width:100%;">Take Photo</button>
-      <div id="photoGallery" style="margin-top:12px;">
-        <div id="photoEmpty">No photos yet. Use "Take Photo" or measure a wall to start building the record.</div>
-      </div>
     </div>
   </div>
 </main>
