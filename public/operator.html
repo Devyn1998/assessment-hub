@@ -82,8 +82,15 @@
   #photoOverlay { position:absolute; inset:0; width:100%; height:100%; cursor:crosshair; }
   #opCalibForm { display:none; background:#0d0e11; border:1px solid #262a31; border-radius:8px; padding:10px; margin-top:10px; }
   #opCalibForm input { width:100%; padding:8px; border-radius:6px; border:1px solid #333; background:#15171b; color:#eee; font-size:14px; margin:6px 0; }
-  #opCalibForm select { width:100%; padding:8px; border-radius:6px; border:1px solid #333; background:#15171b; color:#eee; font-size:14px; }
+  #opCalibForm select { width:100%; padding:8px; border-radius:6px; border:1px solid #333; background:#15171b; color:#eee; font-size:14px; margin:6px 0; }
   #photoCancelRow { display:none; gap:8px; margin-top:8px; }
+  #liveMeasureOverlay { position:absolute; inset:0; width:100%; height:100%; pointer-events:none; z-index:5; }
+  #liveMeasureOverlay.active { pointer-events:auto; cursor:crosshair; }
+  #liveMeasureBanner {
+    display:none; position:absolute; top:10px; left:10px; right:10px; z-index:6;
+    background:rgba(13,14,17,.9); border:1px solid #262a31; border-radius:8px; padding:8px 10px;
+    font-size:12.5px; color:#8fe3b8;
+  }
 
   #photoGallery { display:flex; flex-direction:column; }
   .photo-entry { background:#0d0e11; border:1px solid #262a31; border-radius:10px; padding:8px; margin-bottom:12px; }
@@ -201,6 +208,8 @@
     </div>
     <div id="videoWrap">
       <video id="remoteVideo" autoplay playsinline></video>
+      <canvas id="liveMeasureOverlay"></canvas>
+      <div id="liveMeasureBanner"></div>
       <div id="selfBox"><video id="selfVideo" autoplay playsinline muted></video></div>
     </div>
     <div class="video-controls">
@@ -255,21 +264,36 @@
 
       <div style="display:flex; gap:8px;">
         <button id="takePhotoBtn" class="secondary" style="flex:1;">Take Photo</button>
+        <button id="liveMeasureBtn" class="secondary" style="flex:1;">Measure on Live Video</button>
         <button id="capturePhotoBtn" class="secondary" style="flex:1;">Capture Photo to Measure</button>
       </div>
-      <p class="hint">Homeowner aims the camera — you control the pins and photo capture. Switching rooms above never ends this session.</p>
+      <p class="hint">"Measure on Live Video" taps points right on the feed — no photo saved. "Capture Photo to Measure" freezes a frame first if you want a saved record. Switching rooms above never ends this session.</p>
 
       <div id="photoWrap">
         <img id="photoImg" />
         <canvas id="photoOverlay"></canvas>
       </div>
       <div id="opCalibForm">
-        <div style="font-size:13px;">Real-world length of the yellow line:</div>
-        <input id="opCalibInput" type="number" step="0.1" placeholder="e.g. 36" />
-        <select id="opCalibUnit">
-          <option value="in">inches</option>
-          <option value="ft">feet</option>
+        <div style="font-size:13px;">Reference object for the yellow line:</div>
+        <select id="opRefObjectSelect">
+          <option value="custom">Custom length…</option>
+          <option value="switchPlate">Light switch / outlet plate (4.5 in)</option>
+          <option value="letterPaper">US Letter paper, long edge (11 in)</option>
+          <option value="dollarBill">Dollar bill, long edge (6.14 in)</option>
+          <option value="creditCard">Credit card, long edge (3.37 in)</option>
+          <option value="sodaCan">Soda can height (4.83 in)</option>
+          <option value="waterBottle">16.9oz water bottle height (8.3 in)</option>
+          <option value="interiorDoor">Standard interior door height (80 in)</option>
+          <option value="brick">Standard brick length (8 in)</option>
+          <option value="ruler12">12 inch ruler (hold one up)</option>
         </select>
+        <div id="opCustomLenRow">
+          <input id="opCalibInput" type="number" step="0.1" placeholder="e.g. 36" />
+          <select id="opCalibUnit">
+            <option value="in">inches</option>
+            <option value="ft">feet</option>
+          </select>
+        </div>
         <div style="display:flex; margin-top:8px; gap:8px;">
           <button class="secondary" id="opCalibCancelBtn">Cancel</button>
           <button id="opCalibConfirmBtn">Use this</button>
@@ -330,7 +354,14 @@ const potx = photoOverlay.getContext('2d');
 const opCalibForm = $('opCalibForm');
 const opCalibInput = $('opCalibInput');
 const opCalibUnit = $('opCalibUnit');
+const opRefObjectSelect = $('opRefObjectSelect');
+const opCustomLenRow = $('opCustomLenRow');
 const photoCancelRow = $('photoCancelRow');
+const videoWrap = $('videoWrap');
+const liveMeasureBtn = $('liveMeasureBtn');
+const liveMeasureOverlay = $('liveMeasureOverlay');
+const liveCtx = liveMeasureOverlay.getContext('2d');
+const liveMeasureBanner = $('liveMeasureBanner');
 const takePhotoBtn = $('takePhotoBtn');
 const photoGallery = $('photoGallery');
 const photoEmpty = $('photoEmpty');
@@ -1006,14 +1037,47 @@ endArBtn.addEventListener('click', () => {
   dropPinBtn.textContent = 'Drop Pin';
 });
 
-// ---------- Remote photo measuring ----------
+// ---------- Reference-object measuring (live video or captured photo) ----------
+const REF_LIBRARY = {
+  switchPlate: 4.5,
+  letterPaper: 11,
+  dollarBill: 6.14,
+  creditCard: 3.37,
+  sodaCan: 4.83,
+  waterBottle: 8.3,
+  interiorDoor: 80,
+  brick: 8,
+  ruler12: 12,
+};
+
 let opCalibPts = [];
 let opTargetPts = [];
 let opStage = null; // 'calib' | 'target'
 let opPxPerUnit = null;
+let activeCanvas = null;
+let activeCtx = null;
+let liveMeasureActive = false;
 
+function updateRefObjectUI() {
+  opCustomLenRow.style.display = opRefObjectSelect.value === 'custom' ? 'block' : 'none';
+}
+opRefObjectSelect.addEventListener('change', updateRefObjectUI);
+updateRefObjectUI();
+
+function beginCalibration(canvas, ctx) {
+  activeCanvas = canvas;
+  activeCtx = ctx;
+  opCalibPts = []; opTargetPts = []; opPxPerUnit = null;
+  opStage = 'calib';
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+  opRefObjectSelect.value = 'custom';
+  updateRefObjectUI();
+}
+
+// ---- Capture Photo to Measure (freeze-frame, saves a photo record) ----
 capturePhotoBtn.addEventListener('click', () => {
   if (!ws) return;
+  if (liveMeasureActive) stopLiveMeasure();
   ws.send(JSON.stringify({ type: 'remote-capture-photo', mode: 'measure' }));
   capturePhotoBtn.textContent = 'Requesting photo…';
   capturePhotoBtn.disabled = true;
@@ -1026,19 +1090,59 @@ function showReceivedPhoto(dataUrl) {
   photoImg.src = dataUrl;
   photoWrap.style.display = 'block';
   photoCancelRow.style.display = 'flex';
-  opCalibPts = []; opTargetPts = []; opPxPerUnit = null;
-  opStage = 'calib';
   photoImg.onload = () => {
     photoOverlay.width = photoImg.clientWidth;
     photoOverlay.height = photoImg.clientHeight;
-    potx.clearRect(0, 0, photoOverlay.width, photoOverlay.height);
+    beginCalibration(photoOverlay, potx);
   };
 }
 
-photoOverlay.addEventListener('click', (e) => {
-  if (!opStage) return;
+// ---- Measure on Live Video (no photo saved) ----
+function sizeLiveCanvas() {
+  liveMeasureOverlay.width = videoWrap.clientWidth;
+  liveMeasureOverlay.height = videoWrap.clientHeight;
+}
+
+liveMeasureBtn.addEventListener('click', () => {
+  if (liveMeasureActive) { stopLiveMeasure(); return; }
+  photoWrap.style.display = 'none';
+  photoCancelRow.style.display = 'none';
+  opCalibForm.style.display = 'none';
+  liveMeasureActive = true;
+  liveMeasureOverlay.classList.add('active');
+  liveMeasureBanner.style.display = 'block';
+  liveMeasureBanner.textContent = 'Tap the two ends of a known object on the video below, then pick what it is.';
+  liveMeasureBtn.textContent = 'Cancel Live Measure';
+  sizeLiveCanvas();
+  beginCalibration(liveMeasureOverlay, liveCtx);
+});
+
+function stopLiveMeasure() {
+  liveMeasureActive = false;
+  liveMeasureOverlay.classList.remove('active');
+  liveMeasureBanner.style.display = 'none';
+  liveMeasureBtn.textContent = 'Measure on Live Video';
+  opCalibForm.style.display = 'none';
+  if (activeCanvas === liveMeasureOverlay) {
+    liveCtx.clearRect(0, 0, liveMeasureOverlay.width, liveMeasureOverlay.height);
+    opStage = null;
+    activeCanvas = null;
+    activeCtx = null;
+  }
+}
+
+window.addEventListener('resize', () => {
+  if (!liveMeasureActive) return;
+  sizeLiveCanvas();
+  if (activeCanvas === liveMeasureOverlay) liveCtx.clearRect(0, 0, liveMeasureOverlay.width, liveMeasureOverlay.height);
+});
+
+// ---- Shared click handling for both canvases ----
+function onMeasureCanvasClick(e) {
+  const canvas = e.currentTarget;
+  if (canvas !== activeCanvas || !opStage) return;
   if (opCalibForm.style.display === 'block') return;
-  const rect = photoOverlay.getBoundingClientRect();
+  const rect = canvas.getBoundingClientRect();
   const x = e.clientX - rect.left, y = e.clientY - rect.top;
   if (opStage === 'calib') {
     opCalibPts.push({ x, y });
@@ -1065,46 +1169,65 @@ photoOverlay.addEventListener('click', (e) => {
         pendingMeasurePhoto.measureEl.style.display = '';
         pendingMeasurePhoto = null;
       }
-      ws.send(JSON.stringify({ type: 'measurement-result', ...result }));
-      ws.send(JSON.stringify({ type: 'remote-photo-done' }));
+      if (ws) ws.send(JSON.stringify({ type: 'measurement-result', ...result }));
       opStage = null;
-      photoCancelRow.style.display = 'none';
-      setTimeout(() => { photoWrap.style.display = 'none'; }, 1500);
+      if (canvas === photoOverlay) {
+        if (ws) ws.send(JSON.stringify({ type: 'remote-photo-done' }));
+        photoCancelRow.style.display = 'none';
+        setTimeout(() => { photoWrap.style.display = 'none'; }, 1500);
+        activeCanvas = null; activeCtx = null;
+      } else {
+        liveMeasureBanner.textContent = `Measured: ${result.label}. Tap "Measure on Live Video" to take another.`;
+        setTimeout(stopLiveMeasure, 1800);
+      }
     }
   }
-});
+}
+photoOverlay.addEventListener('click', onMeasureCanvasClick);
+liveMeasureOverlay.addEventListener('click', onMeasureCanvasClick);
 
 function opDrawPoint(x, y, color) {
-  potx.fillStyle = color;
-  potx.beginPath();
-  potx.arc(x, y, 7, 0, Math.PI * 2);
-  potx.fill();
+  activeCtx.fillStyle = color;
+  activeCtx.beginPath();
+  activeCtx.arc(x, y, 7, 0, Math.PI * 2);
+  activeCtx.fill();
 }
 function opDrawLine(a, b, color) {
-  potx.strokeStyle = color;
-  potx.lineWidth = 3;
-  potx.beginPath();
-  potx.moveTo(a.x, a.y);
-  potx.lineTo(b.x, b.y);
-  potx.stroke();
+  activeCtx.strokeStyle = color;
+  activeCtx.lineWidth = 3;
+  activeCtx.beginPath();
+  activeCtx.moveTo(a.x, a.y);
+  activeCtx.lineTo(b.x, b.y);
+  activeCtx.stroke();
 }
 
 $('opCalibCancelBtn').addEventListener('click', () => {
   opCalibPts = [];
-  potx.clearRect(0, 0, photoOverlay.width, photoOverlay.height);
+  if (activeCtx && activeCanvas) activeCtx.clearRect(0, 0, activeCanvas.width, activeCanvas.height);
   opCalibForm.style.display = 'none';
+  if (activeCanvas === liveMeasureOverlay) {
+    liveMeasureBanner.textContent = 'Tap the two ends of a known object on the video below, then pick what it is.';
+  }
 });
 
 $('opCalibConfirmBtn').addEventListener('click', () => {
-  const val = parseFloat(opCalibInput.value);
-  if (!val || val <= 0) { opCalibInput.focus(); return; }
-  const inches = opCalibUnit.value === 'ft' ? val * 12 : val;
+  let inches;
+  if (opRefObjectSelect.value === 'custom') {
+    const val = parseFloat(opCalibInput.value);
+    if (!val || val <= 0) { opCalibInput.focus(); return; }
+    inches = opCalibUnit.value === 'ft' ? val * 12 : val;
+  } else {
+    inches = REF_LIBRARY[opRefObjectSelect.value];
+  }
   const dx = opCalibPts[1].x - opCalibPts[0].x, dy = opCalibPts[1].y - opCalibPts[0].y;
   const pxDist = Math.sqrt(dx * dx + dy * dy);
   opPxPerUnit = pxDist / inches;
   opCalibForm.style.display = 'none';
   opCalibInput.value = '';
   opStage = 'target';
+  if (activeCanvas === liveMeasureOverlay) {
+    liveMeasureBanner.textContent = 'Now tap the two points you want to measure between.';
+  }
 });
 
 $('cancelPhotoBtn').addEventListener('click', () => {
@@ -1114,6 +1237,7 @@ $('cancelPhotoBtn').addEventListener('click', () => {
   opCalibForm.style.display = 'none';
   if (ws) ws.send(JSON.stringify({ type: 'remote-photo-done' }));
   pendingMeasurePhoto = null;
+  activeCanvas = null; activeCtx = null;
 });
 
 // ---------- Tab switching ----------
