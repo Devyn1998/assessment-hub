@@ -393,6 +393,9 @@ assessorSelect.addEventListener('change', () => {
 });
 
 let ws, pc, roomId, localStream = null;
+let cameraOn = false;
+let videoSender = null;
+let audioSender = null;
 let arStep = 0; // UI-only hint counter; homeowner side is the source of truth
 let arHitOk = false;
 let measurementLog = [];
@@ -506,23 +509,54 @@ async function ensurePC() {
   };
 }
 
-$('camBtn').addEventListener('click', async () => {
+async function turnCameraOn() {
   try {
     localStream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
     selfVideo.srcObject = localStream;
+    cameraOn = true;
     $('muteBtn').disabled = false;
-    $('camBtn').textContent = 'Camera On';
-    $('camBtn').disabled = true;
+    $('camBtn').textContent = 'Turn Camera Off';
+    $('camBtn').classList.add('on');
     if (pc) {
-      const senders = pc.getSenders();
       localStream.getTracks().forEach((track) => {
-        const sender = senders.find((s) => s.track && s.track.kind === track.kind);
-        if (sender) sender.replaceTrack(track); else pc.addTrack(track, localStream);
+        try {
+          if (track.kind === 'video') {
+            if (videoSender) videoSender.replaceTrack(track);
+            else videoSender = pc.addTrack(track, localStream);
+          } else if (track.kind === 'audio') {
+            if (audioSender) audioSender.replaceTrack(track);
+            else audioSender = pc.addTrack(track, localStream);
+          }
+        } catch (e) {
+          console.warn('Could not attach track to call', e);
+        }
       });
     }
   } catch (e) {
     alert('Could not access camera/mic: ' + e.message);
   }
+}
+
+function turnCameraOff() {
+  try {
+    if (videoSender) { try { videoSender.replaceTrack(null); } catch (e) { console.warn(e); } }
+    if (audioSender) { try { audioSender.replaceTrack(null); } catch (e) { console.warn(e); } }
+    if (localStream) localStream.getTracks().forEach((t) => { try { t.stop(); } catch (e) {} });
+  } finally {
+    localStream = null;
+    selfVideo.srcObject = null;
+    cameraOn = false;
+    $('camBtn').textContent = 'Enable My Camera/Mic';
+    $('camBtn').classList.remove('on');
+    muted = false;
+    $('muteBtn').textContent = 'Mute Mic';
+    $('muteBtn').disabled = true;
+  }
+}
+
+$('camBtn').addEventListener('click', () => {
+  if (cameraOn) turnCameraOff();
+  else turnCameraOn();
 });
 
 let muted = false;
