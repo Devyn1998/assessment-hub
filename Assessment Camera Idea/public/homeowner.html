@@ -91,6 +91,28 @@
   .mood-btn.sad { border-color:#e0722a; background:rgba(224,114,42,.15); }
   .mood-btn.meh { border-color:#e0c22a; background:rgba(224,194,42,.15); }
   .mood-btn.happy { border-color:#3ecf5f; background:rgba(62,207,95,.15); }
+
+  button.danger { background:#c0392b; }
+
+  #satisfactionModal {
+    position:fixed; inset:0; z-index:70; background:rgba(0,0,0,.82);
+    display:none; align-items:center; justify-content:center; padding:24px;
+  }
+  .sat-card { background:#17181c; border-radius:16px; padding:28px 22px; text-align:center; max-width:360px; width:100%; }
+  .sat-title { font-size:16px; font-weight:600; color:#fff; margin-bottom:18px; }
+  #satisfactionSlider { width:100%; margin:10px 0; accent-color:#3ecf5f; }
+  #satisfactionValue { color:#3ecf5f; font-size:22px; font-weight:700; margin-bottom:18px; }
+  .celebrate-wrap { display:none; flex-direction:column; align-items:center; background:transparent; box-shadow:none; }
+  .celebrate-bubble {
+    position:relative; background:#fff; color:#111; font-weight:700; font-size:16px;
+    padding:10px 18px; border-radius:14px; margin-bottom:14px;
+  }
+  .celebrate-bubble::after {
+    content:''; position:absolute; bottom:-8px; left:50%; margin-left:-8px;
+    border-width:8px 8px 0; border-style:solid; border-color:#fff transparent transparent;
+  }
+  .celebrate-emoji { font-size:70px; animation:celebrateBounce .6s ease-in-out infinite alternate; }
+  @keyframes celebrateBounce { from { transform:translateY(0); } to { transform:translateY(-12px); } }
 </style>
 </head>
 <body>
@@ -165,6 +187,23 @@ let pc = null;
 let localStream = null;
 let currentFacing = 'environment';
 
+// Camera permission can resolve (and trigger ICE gathering / renegotiation)
+// before this signaling socket finishes connecting, especially on a slow
+// mobile network. Sending on a CONNECTING socket throws and silently drops
+// the message, so route every outgoing message through here: send now if
+// open, otherwise queue and flush once the socket opens.
+const wsQueue = [];
+function wsSend(msg) {
+  if (ws.readyState === WebSocket.OPEN) {
+    ws.send(JSON.stringify(msg));
+  } else {
+    wsQueue.push(msg);
+  }
+}
+ws.addEventListener('open', () => {
+  while (wsQueue.length) ws.send(JSON.stringify(wsQueue.shift()));
+});
+
 function setStatus(text, live) {
   statusText.textContent = text;
   dot.classList.toggle('live', !!live);
@@ -192,8 +231,8 @@ function startHomeownerSpeechRecognition() {
       for (let i = e.resultIndex; i < e.results.length; i++) {
         if (e.results[i].isFinal) {
           const text = e.results[i][0].transcript;
-          if (text && text.trim() && ws.readyState === WebSocket.OPEN) {
-            ws.send(JSON.stringify({ type: 'speech-transcript', text }));
+          if (text && text.trim()) {
+            wsSend({ type: 'speech-transcript', text });
           }
         }
       }
@@ -214,8 +253,8 @@ const moodModal = $('moodModal');
 let pendingMood = null;
 
 function trySendMood() {
-  if (pendingMood && ws.readyState === WebSocket.OPEN) {
-    ws.send(JSON.stringify({ type: 'customer-mood', mood: pendingMood.mood, emoji: pendingMood.emoji }));
+  if (pendingMood) {
+    wsSend({ type: 'customer-mood', mood: pendingMood.mood, emoji: pendingMood.emoji });
     pendingMood = null;
   }
 }
@@ -247,7 +286,7 @@ function showBannerOnce() {
 }
 
 ws.addEventListener('open', () => {
-  ws.send(JSON.stringify({ type: 'join', roomId, role: 'homeowner' }));
+  wsSend({ type: 'join', roomId, role: 'homeowner' });
 });
 
 ws.addEventListener('message', async (ev) => {
@@ -263,7 +302,7 @@ ws.addEventListener('message', async (ev) => {
     await pc.setRemoteDescription(new RTCSessionDescription(msg.sdp));
     const answer = await pc.createAnswer();
     await pc.setLocalDescription(answer);
-    ws.send(JSON.stringify({ type: 'answer', sdp: pc.localDescription }));
+    wsSend({ type: 'answer', sdp: pc.localDescription });
   } else if (msg.type === 'answer') {
     if (pc) await pc.setRemoteDescription(new RTCSessionDescription(msg.sdp));
   } else if (msg.type === 'ice-candidate') {
@@ -298,7 +337,7 @@ async function ensurePC() {
     localStream.getTracks().forEach((t) => pc.addTrack(t, localStream));
   }
   pc.onicecandidate = (e) => {
-    if (e.candidate) ws.send(JSON.stringify({ type: 'ice-candidate', candidate: e.candidate }));
+    if (e.candidate) wsSend({ type: 'ice-candidate', candidate: e.candidate });
   };
   pc.ontrack = (e) => {
     remoteVideo.srcObject = e.streams[0];
@@ -323,7 +362,7 @@ async function ensurePC() {
     try {
       const offer = await pc.createOffer();
       await pc.setLocalDescription(offer);
-      ws.send(JSON.stringify({ type: 'offer', sdp: pc.localDescription }));
+      wsSend({ type: 'offer', sdp: pc.localDescription });
     } catch (e) {
       console.warn('renegotiation failed', e);
     } finally {
@@ -363,7 +402,7 @@ $('flipBtn').addEventListener('click', () => {
 });
 
 function sendMeasurement(payload) {
-  ws.send(JSON.stringify({ type: 'measurement', ...payload }));
+  wsSend({ type: 'measurement', ...payload });
 }
 
 function formatMeters(m) {
@@ -417,7 +456,7 @@ async function startAR() {
     crosshair.style.display = '';
     measureBanner.style.display = '';
     measureBanner.textContent = 'Aim the crosshair at a wall — your assessor will take it from here.';
-    ws.send(JSON.stringify({ type: 'ar-started' }));
+    wsSend({ type: 'ar-started' });
 
     xrSession.addEventListener('end', () => onAREnd());
 
@@ -444,7 +483,7 @@ async function startAR() {
       // flips, not every frame — keeps the socket quiet during normal use.
       if (hasHit !== lastHitState) {
         lastHitState = hasHit;
-        ws.send(JSON.stringify({ type: 'ar-hit-state', hit: hasHit }));
+        wsSend({ type: 'ar-hit-state', hit: hasHit });
       }
     }
     xrSession.requestAnimationFrame(onXRFrame);
@@ -490,28 +529,40 @@ function onAREnd() {
   crosshair.classList.remove('hit');
   measureBanner.style.display = 'none';
   $('camRow').style.display = '';
-  ws.send(JSON.stringify({ type: 'ar-ended' }));
+  wsSend({ type: 'ar-ended' });
   checkAR();
 }
 
 // Triggered remotely by the operator — grabs the current frame and sends
 // it over so the assessor can do the measuring taps on their own screen.
 function captureAndSendFrame(mode) {
-  const fctx = freezeCanvas.getContext('2d');
-  const vw = localVideo.videoWidth, vh = localVideo.videoHeight;
-  if (!vw) return;
-  const cw = freezeCanvas.width, ch = freezeCanvas.height;
-  const scale = Math.max(cw / vw, ch / vh);
-  const dw = vw * scale, dh = vh * scale;
-  const dx = (cw - dw) / 2, dy = (ch - dh) / 2;
-  fctx.drawImage(localVideo, dx, dy, dw, dh);
-  freezeCanvas.style.display = '';
-  measureBanner.style.display = '';
-  measureBanner.textContent = mode === 'document'
-    ? 'Hold steady — your assessor is taking a photo.'
-    : 'Hold steady — your assessor is measuring from this photo.';
-  const dataUrl = freezeCanvas.toDataURL('image/jpeg', 0.6);
-  ws.send(JSON.stringify({ type: 'photo-frame', image: dataUrl, width: cw, height: ch, mode: mode || 'measure' }));
+  try {
+    const fctx = freezeCanvas.getContext('2d');
+    const vw = localVideo.videoWidth, vh = localVideo.videoHeight;
+    if (!vw || !vh) {
+      // Camera not actually streaming yet (permission still pending, tab
+      // backgrounded, etc). Previously this failed completely silently —
+      // the assessor's button would just reset after a few seconds with no
+      // explanation. Tell them what happened instead.
+      wsSend({ type: 'photo-capture-failed', reason: 'Camera not ready on the homeowner\'s device yet' });
+      return;
+    }
+    const cw = freezeCanvas.width, ch = freezeCanvas.height;
+    const scale = Math.max(cw / vw, ch / vh);
+    const dw = vw * scale, dh = vh * scale;
+    const dx = (cw - dw) / 2, dy = (ch - dh) / 2;
+    fctx.drawImage(localVideo, dx, dy, dw, dh);
+    freezeCanvas.style.display = '';
+    measureBanner.style.display = '';
+    measureBanner.textContent = mode === 'document'
+      ? 'Hold steady — your assessor is taking a photo.'
+      : 'Hold steady — your assessor is measuring from this photo.';
+    const dataUrl = freezeCanvas.toDataURL('image/jpeg', 0.6);
+    wsSend({ type: 'photo-frame', image: dataUrl, width: cw, height: ch, mode: mode || 'measure' });
+  } catch (e) {
+    console.error('Photo capture failed', e);
+    wsSend({ type: 'photo-capture-failed', reason: e.message || 'Unknown error capturing photo' });
+  }
 }
 
 function showResult(label, big, sub) {
