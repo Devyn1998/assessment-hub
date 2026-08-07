@@ -55,6 +55,7 @@
   #roomCustomInput { width:100%; padding:9px 10px; border-radius:8px; border:1px solid #2b2e36; background:#0d0e12; color:#eee; font-size:13px; margin-top:6px; display:none; }
 
   .tabs { display:flex; background:#14161b; border-left:1px solid #23262d; border-right:1px solid #23262d; padding:4px; gap:4px; }
+  .tabs.no-room-bar { border-top:1px solid #23262d; border-radius:12px 12px 0 0; }
   .tab-btn { flex:1; background:transparent; color:#9a9ca3; padding:9px 6px; font-size:12.5px; font-weight:600; border-radius:8px; }
   .tab-btn.active { background:#2a2d34; color:#fff; }
 
@@ -107,6 +108,14 @@
   .room-group .room-line { font-size:11.5px; color:#ccc; display:flex; justify-content:space-between; padding:2px 0; }
   .room-group .room-line .rl-label { color:#999; }
   .room-group .room-line.unlabeled .rl-label { color:#c0392b; }
+  #floorPlanGrid { display:flex; flex-wrap:wrap; gap:14px; align-items:flex-end; }
+  .fp-card { display:flex; flex-direction:column; align-items:center; }
+  .fp-box { background:#12151a; border:2px solid #3a4048; border-radius:4px; position:relative; min-width:60px; min-height:60px; display:flex; flex-wrap:wrap; align-content:flex-start; gap:3px; padding:4px; overflow:hidden; }
+  .fp-box.estimated { border-style:dashed; }
+  .fp-box img { width:28px; height:28px; object-fit:cover; border-radius:3px; border:1px solid #262a31; }
+  .fp-label { font-size:11px; font-weight:700; color:#8ab4ff; margin-top:6px; text-align:center; max-width:160px; }
+  .fp-dims { font-size:10.5px; color:#888; text-align:center; }
+  .fp-photo-count { font-size:10px; color:#666; text-align:center; }
 
   #checklistReminder {
     display:none; background:#3a2a0d; border:1px solid #6b4a12; color:#ffd38a;
@@ -223,7 +232,7 @@
   </div>
 
   <div class="side-col">
-    <div class="room-bar">
+    <div class="room-bar" id="roomBar">
       <label>Room</label>
       <select id="roomSelect">
         <option value="">Select room…</option>
@@ -249,6 +258,7 @@
 
     <div class="tabs">
       <button class="tab-btn active" data-tab="measure">Measures + Photos</button>
+      <button class="tab-btn" data-tab="floorplan">Floor Plan</button>
       <button class="tab-btn" data-tab="checklist">Checklist</button>
     </div>
 
@@ -267,7 +277,8 @@
         <button id="liveMeasureBtn" class="secondary" style="flex:1;">Measure on Live Video</button>
         <button id="capturePhotoBtn" class="secondary" style="flex:1;">Capture Photo to Measure</button>
       </div>
-      <p class="hint">"Measure on Live Video" taps points right on the feed — no photo saved. "Capture Photo to Measure" freezes a frame first if you want a saved record. Switching rooms above never ends this session.</p>
+      <p class="hint">"Measure on Live Video" taps points right on the feed — no photo saved. "Capture Photo to Measure" freezes a frame first if you want a saved record. Switching rooms above never ends this session. Every measurement recalibrates its scale fresh from the reference object you tap — so it stays accurate as you move around, not just at one distance.</p>
+      <div id="calibStatus" class="hint" style="margin:0 0 10px;"></div>
 
       <div id="photoWrap">
         <img id="photoImg" />
@@ -317,6 +328,13 @@
       </div>
     </div>
 
+    <div class="tab-panel" id="tab-floorplan" style="display:none;">
+      <p class="hint">Rooms are drawn to scale from your "Width" and "Wall Length" tagged measurements, and photos are pinned to the room they were taken in. This is a scaled room-by-room layout for reference and record-keeping — not yet a connected walkthrough map (we don't capture which walls border which rooms).</p>
+      <div id="scaleReadout" class="hint" style="margin-top:0;"></div>
+      <div id="floorPlanGrid"></div>
+      <div id="floorPlanEmpty" class="hint" style="margin:0;">No rooms yet. Tag a measurement "Width" or "Wall Length" (or just take a photo) in a room to add it here.</div>
+    </div>
+
     <div class="tab-panel" id="tab-checklist" style="display:none;">
       <button id="listenBtn" class="secondary">Start Listening</button>
       <p class="hint">Uses your browser's built-in speech recognition — free, no account, but it's keyword matching, not true understanding. Check items manually any time.</p>
@@ -329,6 +347,12 @@
     </div>
   </div>
 </main>
+
+<!-- Free, self-hosted (no API key, no per-call cost) object classifier used to
+     suggest a room type from each captured photo. Runs entirely in this
+     browser tab; nothing is sent anywhere. -->
+<script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.20.0/dist/tf.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/mobilenet@2.1.1/dist/mobilenet.min.js"></script>
 
 <script>
 const $ = (id) => document.getElementById(id);
@@ -379,6 +403,10 @@ const roomMeasurementsEl = $('roomMeasurements');
 const roomMeasureEmpty = $('roomMeasureEmpty');
 const moodBox = $('moodBox');
 const moodEmoji = $('moodEmoji');
+const calibStatus = $('calibStatus');
+const floorPlanGrid = $('floorPlanGrid');
+const floorPlanEmpty = $('floorPlanEmpty');
+const scaleReadout = $('scaleReadout');
 const assessorSelect = $('assessorSelect');
 let currentAssessor = '';
 
@@ -393,6 +421,17 @@ assessorSelect.addEventListener('change', () => {
 });
 
 let ws, pc, roomId, localStream = null;
+// "Perfect negotiation" glare guard: the operator always sends the first
+// offer, and the homeowner can also self-trigger one the moment their
+// camera permission resolves. If both happen close together, whichever
+// side receives an offer while it's mid-offer needs to yield instead of
+// throwing — operator is "impolite" (its own offer wins a collision),
+// homeowner is the polite counterpart (see homeowner.html).
+let makingOffer = false;
+const polite = false;
+let cameraOn = false;
+let videoSender = null;
+let audioSender = null;
 let arStep = 0; // UI-only hint counter; homeowner side is the source of truth
 let arHitOk = false;
 let measurementLog = [];
@@ -435,21 +474,35 @@ function connectWS() {
     const msg = JSON.parse(ev.data);
     if (msg.type === 'peer-joined' && msg.role === 'homeowner') {
       setStatus('Homeowner connected — negotiating video…', false);
+      // Just create the connection — ensurePC() always gives it something
+      // to negotiate (your camera track if it's on, or a receive-only slot
+      // if it's not), so onnegotiationneeded fires the actual offer below.
       await ensurePC();
-      const offer = await pc.createOffer();
-      await pc.setLocalDescription(offer);
-      ws.send(JSON.stringify({ type: 'offer', sdp: pc.localDescription }));
       sendAssessorName();
     } else if (msg.type === 'peer-left' && msg.role === 'homeowner') {
       setStatus('Homeowner disconnected', false);
       remoteVideo.srcObject = null;
     } else if (msg.type === 'answer') {
-      if (pc) await pc.setRemoteDescription(new RTCSessionDescription(msg.sdp));
+      // A stale answer can arrive after we've already rolled back our own
+      // offer during a collision — only apply it if we're actually still
+      // waiting on one.
+      if (pc && pc.signalingState === 'have-local-offer') {
+        try { await pc.setRemoteDescription(new RTCSessionDescription(msg.sdp)); }
+        catch (e) { console.warn('Could not apply answer', e); }
+      }
     } else if (msg.type === 'offer') {
       // The homeowner's camera permission prompt can resolve after the
       // initial handshake completes, in which case their page renegotiates
       // by sending us a fresh offer so their video actually gets through.
+      // This can race with our own offer (see peer-joined above) — handle
+      // that collision instead of letting setRemoteDescription throw and
+      // silently kill that side's video.
       await ensurePC();
+      const offerCollision = makingOffer || pc.signalingState !== 'stable';
+      if (!polite && offerCollision) return; // our own offer wins; homeowner will yield
+      if (offerCollision) {
+        await pc.setLocalDescription({ type: 'rollback' });
+      }
       await pc.setRemoteDescription(new RTCSessionDescription(msg.sdp));
       const answer = await pc.createAnswer();
       await pc.setLocalDescription(answer);
@@ -479,6 +532,16 @@ function connectWS() {
         pendingMeasurePhoto = addGalleryPhoto(msg.image, 'measure');
         showReceivedPhoto(msg.image);
       }
+      takePhotoBtn.textContent = 'Take Photo';
+      takePhotoBtn.disabled = false;
+      capturePhotoBtn.textContent = 'Capture Photo to Measure';
+      capturePhotoBtn.disabled = false;
+    } else if (msg.type === 'photo-capture-failed') {
+      takePhotoBtn.textContent = 'Take Photo';
+      takePhotoBtn.disabled = false;
+      capturePhotoBtn.textContent = 'Capture Photo to Measure';
+      capturePhotoBtn.disabled = false;
+      alert('Photo didn\'t come through: ' + (msg.reason || 'unknown issue on the homeowner\'s device') + '. Ask them to make sure their camera is on, then try again.');
     } else if (msg.type === 'speech-transcript') {
       matchChecklist(msg.text, 'homeowner');
     } else if (msg.type === 'customer-mood') {
@@ -492,7 +555,16 @@ function connectWS() {
 async function ensurePC() {
   if (pc) return;
   pc = new RTCPeerConnection({ iceServers: window.HUD_ICE_SERVERS });
-  if (localStream) localStream.getTracks().forEach((t) => pc.addTrack(t, localStream));
+  if (localStream) {
+    localStream.getTracks().forEach((t) => pc.addTrack(t, localStream));
+  } else {
+    // A brand-new connection with nothing added never fires
+    // negotiationneeded on its own — add empty receive-only slots so the
+    // very first offer still goes out (and so it has somewhere for the
+    // homeowner's video to land even before you turn your own camera on).
+    pc.addTransceiver('video', { direction: 'recvonly' });
+    pc.addTransceiver('audio', { direction: 'recvonly' });
+  }
   pc.onicecandidate = (e) => {
     if (e.candidate) ws.send(JSON.stringify({ type: 'ice-candidate', candidate: e.candidate }));
   };
@@ -504,25 +576,71 @@ async function ensurePC() {
     if (pc.connectionState === 'connected') setStatus('Live', true);
     if (['disconnected','failed','closed'].includes(pc.connectionState)) setStatus('Connection lost', false);
   };
+  // Fires for the initial offer above, and again any time tracks change
+  // later (e.g. turning your camera on/off mid-call) — without this,
+  // post-connection camera toggles never actually reach the homeowner.
+  pc.onnegotiationneeded = async () => {
+    try {
+      makingOffer = true;
+      const offer = await pc.createOffer();
+      await pc.setLocalDescription(offer);
+      ws.send(JSON.stringify({ type: 'offer', sdp: pc.localDescription }));
+    } catch (e) {
+      console.warn('renegotiation failed', e);
+    } finally {
+      makingOffer = false;
+    }
+  };
 }
 
-$('camBtn').addEventListener('click', async () => {
+async function turnCameraOn() {
   try {
     localStream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
     selfVideo.srcObject = localStream;
+    cameraOn = true;
     $('muteBtn').disabled = false;
-    $('camBtn').textContent = 'Camera On';
-    $('camBtn').disabled = true;
+    $('camBtn').textContent = 'Turn Camera Off';
+    $('camBtn').classList.add('on');
     if (pc) {
-      const senders = pc.getSenders();
       localStream.getTracks().forEach((track) => {
-        const sender = senders.find((s) => s.track && s.track.kind === track.kind);
-        if (sender) sender.replaceTrack(track); else pc.addTrack(track, localStream);
+        try {
+          if (track.kind === 'video') {
+            if (videoSender) videoSender.replaceTrack(track);
+            else videoSender = pc.addTrack(track, localStream);
+          } else if (track.kind === 'audio') {
+            if (audioSender) audioSender.replaceTrack(track);
+            else audioSender = pc.addTrack(track, localStream);
+          }
+        } catch (e) {
+          console.warn('Could not attach track to call', e);
+        }
       });
     }
   } catch (e) {
     alert('Could not access camera/mic: ' + e.message);
   }
+}
+
+function turnCameraOff() {
+  try {
+    if (videoSender) { try { videoSender.replaceTrack(null); } catch (e) { console.warn(e); } }
+    if (audioSender) { try { audioSender.replaceTrack(null); } catch (e) { console.warn(e); } }
+    if (localStream) localStream.getTracks().forEach((t) => { try { t.stop(); } catch (e) {} });
+  } finally {
+    localStream = null;
+    selfVideo.srcObject = null;
+    cameraOn = false;
+    $('camBtn').textContent = 'Enable My Camera/Mic';
+    $('camBtn').classList.remove('on');
+    muted = false;
+    $('muteBtn').textContent = 'Mute Mic';
+    $('muteBtn').disabled = true;
+  }
+}
+
+$('camBtn').addEventListener('click', () => {
+  if (cameraOn) turnCameraOff();
+  else turnCameraOn();
 });
 
 let muted = false;
@@ -547,10 +665,25 @@ $('newBtn').addEventListener('click', () => {
 
 const MEASURE_TAGS = ['Width', 'Height', 'Ceiling Height', 'Wall Length'];
 
+function measureLabelText(entry) {
+  return `${entry.userLabel ? entry.userLabel : 'Measured'}: ${entry.label || ''}`;
+}
+
+// Every measurement — still, live, or AR — ends up attached to the photo it
+// came from (entry.photoEntry <-> photoEntry.measurement) so tagging one
+// updates the other and nothing drifts apart in the Photo Memory Bank.
+function attachMeasurementToPhoto(entry, photoEntry) {
+  entry.photoEntry = photoEntry;
+  photoEntry.measurement = entry;
+  photoEntry.measureEl.textContent = measureLabelText(entry);
+  photoEntry.measureEl.style.display = '';
+}
+
 function addMeasurement(msg) {
   const entry = { ...msg, time: Date.now(), userLabel: '', room: currentRoom || 'Unassigned' };
   measurementLog.push(entry);
   renderRoomMeasurements();
+  renderFloorPlan();
   empty.remove();
   const card = document.createElement('div');
   card.className = 'measure-card';
@@ -566,6 +699,11 @@ function addMeasurement(msg) {
     const img = document.createElement('img');
     img.src = msg.thumb;
     card.appendChild(img);
+    // AR measurements arrive with their own snapshot already — file it in
+    // the Photo Memory Bank right away so the photo and its measurement
+    // travel together instead of living only in this side log.
+    const photoEntry = addGalleryPhoto(msg.thumb, 'measure');
+    attachMeasurementToPhoto(entry, photoEntry);
   }
   const tagRow = card.querySelector('.tag-row');
   const tagMissing = card.querySelector('.tag-missing');
@@ -577,7 +715,9 @@ function addMeasurement(msg) {
       entry.userLabel = tag;
       tagRow.querySelectorAll('.tag-btn').forEach((b) => b.classList.toggle('active', b === btn));
       tagMissing.style.display = 'none';
+      if (entry.photoEntry) entry.photoEntry.measureEl.textContent = measureLabelText(entry);
       renderRoomMeasurements();
+      renderFloorPlan();
     });
     tagRow.appendChild(btn);
   });
@@ -633,6 +773,145 @@ function renderRoomMeasurements() {
   });
 }
 
+// ---------- Floor plan (scaled room footprints from real measurements) ----------
+const FOOTPRINT_TAGS = ['Width', 'Wall Length'];
+const PX_PER_FOOT = 14;
+const FP_MIN_PX = 60;
+const FP_MAX_PX = 320;
+
+function metersToFeet(m) { return m * 3.28084; }
+
+function renderFloorPlan() {
+  const rooms = {}; // room name -> { measurements: [], photoCount, dims: [feet,...] }
+  measurementLog.forEach((m) => {
+    const room = m.room || 'Unassigned';
+    if (!rooms[room]) rooms[room] = { dims: [], photoCount: 0 };
+    if (FOOTPRINT_TAGS.includes(m.userLabel) && m.distanceMeters) {
+      rooms[room].dims.push(metersToFeet(m.distanceMeters));
+    }
+  });
+  sessionPhotos.forEach((p) => {
+    const room = p.room || 'Unassigned';
+    if (!rooms[room]) rooms[room] = { dims: [], photoCount: 0 };
+    rooms[room].photoCount++;
+  });
+
+  const roomNames = Object.keys(rooms);
+  if (!roomNames.length) {
+    floorPlanGrid.innerHTML = '';
+    floorPlanEmpty.style.display = '';
+    scaleReadout.textContent = '';
+    return;
+  }
+  floorPlanEmpty.style.display = 'none';
+  scaleReadout.textContent = `Scale: ${PX_PER_FOOT}px = 1 ft, based on measurements tagged "Width" or "Wall Length".`;
+
+  floorPlanGrid.innerHTML = '';
+  roomNames.forEach((room) => {
+    const info = rooms[room];
+    const dimsSorted = info.dims.slice().sort((a, b) => b - a);
+    let w, d, estimated;
+    if (dimsSorted.length >= 2) {
+      w = dimsSorted[0]; d = dimsSorted[1]; estimated = false;
+    } else if (dimsSorted.length === 1) {
+      w = dimsSorted[0]; d = dimsSorted[0]; estimated = true;
+    } else {
+      w = null; d = null; estimated = true;
+    }
+    const boxW = w ? Math.max(FP_MIN_PX, Math.min(FP_MAX_PX, w * PX_PER_FOOT)) : FP_MIN_PX;
+    const boxD = d ? Math.max(FP_MIN_PX, Math.min(FP_MAX_PX, d * PX_PER_FOOT)) : FP_MIN_PX;
+
+    const card = document.createElement('div');
+    card.className = 'fp-card';
+    const box = document.createElement('div');
+    box.className = 'fp-box' + (estimated ? ' estimated' : '');
+    box.style.width = boxW + 'px';
+    box.style.height = boxD + 'px';
+
+    const roomPhotos = sessionPhotos.filter((p) => (p.room || 'Unassigned') === room).slice(0, 12);
+    roomPhotos.forEach((p) => {
+      const img = document.createElement('img');
+      img.src = p.dataUrl;
+      img.title = p.description || '';
+      box.appendChild(img);
+    });
+
+    const dimsText = w ? `${Math.round(w * 10) / 10}ft × ${Math.round(d * 10) / 10}ft${estimated ? ' (~est., only one wall tagged)' : ''}` : 'Not measured yet';
+
+    card.appendChild(box);
+    const labelEl = document.createElement('div');
+    labelEl.className = 'fp-label';
+    labelEl.textContent = room;
+    card.appendChild(labelEl);
+    const dimsEl = document.createElement('div');
+    dimsEl.className = 'fp-dims';
+    dimsEl.textContent = dimsText;
+    card.appendChild(dimsEl);
+    const countEl = document.createElement('div');
+    countEl.className = 'fp-photo-count';
+    countEl.textContent = `${info.photoCount} photo${info.photoCount === 1 ? '' : 's'}`;
+    card.appendChild(countEl);
+
+    floorPlanGrid.appendChild(card);
+  });
+}
+
+// ---------- Free client-side room auto-label (TensorFlow.js MobileNet) ----------
+// MobileNet is an object classifier (ImageNet's 1000 classes), not a room/
+// scene classifier, so this is a best-effort heuristic: look at what objects
+// it sees in the photo and map common ones to the room they usually live in.
+// Runs entirely in this browser tab — no API key, no per-photo cost, nothing
+// leaves the device. It's a suggestion the assessor can ignore; it never
+// overwrites the actual room tag on its own.
+const ROOM_HINTS = [
+  { room: 'Kitchen', keywords: ['refrigerator', 'icebox', 'microwave', 'dishwasher', 'toaster', 'stove', 'oven', 'rotisserie', 'espresso maker', 'washer', 'coffeepot', 'frying pan', 'wok', 'cleaver'] },
+  { room: 'Bathroom', keywords: ['shower curtain', 'toilet', 'tub', 'bathtub', 'medicine chest', 'medicine cabinet', 'washbasin', 'soap dispenser', 'hand blower'] },
+  { room: 'Bedroom', keywords: ['four-poster', 'cradle', 'crib', 'quilt', 'pillow', 'bassinet'] },
+  { room: 'Living Room', keywords: ['studio couch', 'day bed', 'entertainment center', 'television', 'fireplace', 'home theater', 'rocking chair', 'throne'] },
+  { room: 'Office/Den', keywords: ['desk', 'file cabinet', 'filing cabinet', 'bookcase', 'desktop computer', 'notebook computer', 'printer', 'typewriter'] },
+  { room: 'Laundry Room', keywords: ['washing machine', 'washer, automatic washer', 'clothes iron'] },
+  { room: 'Garage', keywords: ['garage door', 'pickup', 'tow truck', 'snowplow', 'moped', 'tool kit'] },
+];
+
+let mobilenetModelPromise = null;
+function getMobilenetModel() {
+  if (!mobilenetModelPromise) {
+    if (typeof mobilenet === 'undefined') {
+      mobilenetModelPromise = Promise.reject(new Error('MobileNet library did not load'));
+    } else {
+      mobilenetModelPromise = mobilenet.load();
+    }
+  }
+  return mobilenetModelPromise;
+}
+
+function guessRoomFromPredictions(predictions) {
+  for (const pred of predictions) {
+    const className = pred.className.toLowerCase();
+    for (const hint of ROOM_HINTS) {
+      if (hint.keywords.some((kw) => className.includes(kw))) return hint.room;
+    }
+  }
+  return null;
+}
+
+function suggestRoomFromPhoto(dataUrl, entryDiv) {
+  getMobilenetModel().then((model) => {
+    const img = entryDiv.querySelector('img');
+    const run = () => {
+      model.classify(img).then((predictions) => {
+        const guess = guessRoomFromPredictions(predictions);
+        if (!guess) return;
+        const badge = document.createElement('div');
+        badge.style.cssText = 'font-size:10.5px;color:#3ecf5f;margin-bottom:4px;';
+        badge.textContent = `AI guess: ${guess} (unconfirmed — tap Room above to set it for real)`;
+        entryDiv.insertBefore(badge, entryDiv.querySelector('.photo-desc'));
+      }).catch((e) => console.warn('Room classify failed', e));
+    };
+    if (img.complete) run(); else img.addEventListener('load', run, { once: true });
+  }).catch((e) => console.warn('MobileNet unavailable, skipping room suggestion', e));
+}
+
 // ---------- Photo memory bank ----------
 function addGalleryPhoto(dataUrl, mode) {
   const entry = { id: ++photoCounter, dataUrl, time: new Date(), description: '', mode, measurement: null, room: currentRoom || 'Unassigned' };
@@ -651,6 +930,8 @@ function addGalleryPhoto(dataUrl, mode) {
   const textarea = div.querySelector('.photo-desc');
   textarea.addEventListener('input', () => { entry.description = textarea.value; });
   photoGallery.prepend(div);
+  renderFloorPlan();
+  suggestRoomFromPhoto(dataUrl, div);
   return entry;
 }
 
@@ -930,7 +1211,7 @@ function buildAndDownloadReport() {
     <div style="background:#f7f7f7;border:1px solid #ddd;border-radius:10px;padding:12px;margin-bottom:16px;">
       <img src="${p.dataUrl}" style="max-width:100%;border-radius:6px;display:block;margin-bottom:8px;" />
       <div style="font-size:12px;color:#666;">${escapeHtml(p.room || 'Unassigned')} · ${p.time.toLocaleString()}${p.mode === 'measure' ? ' · Measurement photo' : ''}</div>
-      ${p.measurement ? `<div style="font-weight:700;color:#1e6fe0;margin-top:4px;">Measured: ${escapeHtml(p.measurement.label)} (${p.measurement.distanceMeters} m)</div>` : ''}
+      ${p.measurement ? `<div style="font-weight:700;color:#1e6fe0;margin-top:4px;">${escapeHtml(p.measurement.userLabel || 'Measured')}: ${escapeHtml(p.measurement.label)} (${p.measurement.distanceMeters} m)</div>` : ''}
       ${p.description ? `<div style="margin-top:8px;white-space:pre-wrap;">${escapeHtml(p.description)}</div>` : '<div style="margin-top:8px;color:#999;font-style:italic;">No description added.</div>'}
     </div>
   `).join('');
@@ -1058,6 +1339,23 @@ let activeCanvas = null;
 let activeCtx = null;
 let liveMeasureActive = false;
 
+// Grabs a still frame from a live <video> element (used to save a photo
+// alongside a "Measure on Live Video" result, since that flow doesn't
+// otherwise capture one).
+function snapshotVideoFrame(videoEl) {
+  if (!videoEl || !videoEl.videoWidth) return null;
+  try {
+    const c = document.createElement('canvas');
+    c.width = videoEl.videoWidth;
+    c.height = videoEl.videoHeight;
+    c.getContext('2d').drawImage(videoEl, 0, 0, c.width, c.height);
+    return c.toDataURL('image/jpeg', 0.85);
+  } catch (e) {
+    console.warn('Could not snapshot live video frame', e);
+    return null;
+  }
+}
+
 function updateRefObjectUI() {
   opCustomLenRow.style.display = opRefObjectSelect.value === 'custom' ? 'block' : 'none';
 }
@@ -1070,7 +1368,10 @@ function beginCalibration(canvas, ctx) {
   opCalibPts = []; opTargetPts = []; opPxPerUnit = null;
   opStage = 'calib';
   ctx.clearRect(0, 0, canvas.width, canvas.height);
-  opRefObjectSelect.value = 'custom';
+  // Default to the interior door: it's the one reference object almost
+  // always in frame no matter which room you're in, so most calibrations
+  // need zero extra taps to pick something from the list.
+  opRefObjectSelect.value = 'interiorDoor';
   updateRefObjectUI();
 }
 
@@ -1162,15 +1463,27 @@ function onMeasureCanvasClick(e) {
       const meters = inches * 0.0254;
       const f = formatMeters(meters);
       const result = { mode: 'manual', distanceMeters: f.meters, label: f.label };
-      addMeasurement(result);
-      if (pendingMeasurePhoto) {
-        pendingMeasurePhoto.measurement = result;
-        pendingMeasurePhoto.measureEl.textContent = `Measured: ${result.label}`;
-        pendingMeasurePhoto.measureEl.style.display = '';
+      const entry = addMeasurement(result);
+      if (canvas === photoOverlay && pendingMeasurePhoto) {
+        // Still-photo flow: the photo was already saved when it was captured —
+        // just link this measurement to it.
+        attachMeasurementToPhoto(entry, pendingMeasurePhoto);
         pendingMeasurePhoto = null;
+      } else if (canvas === liveMeasureOverlay) {
+        // Live-video flow: no photo exists yet, so grab a frame right now and
+        // file it in the Photo Memory Bank with the measurement attached, so
+        // the two never end up separated.
+        const snapUrl = snapshotVideoFrame(remoteVideo);
+        if (snapUrl) {
+          const photoEntry = addGalleryPhoto(snapUrl, 'measure');
+          attachMeasurementToPhoto(entry, photoEntry);
+        }
       }
       if (ws) ws.send(JSON.stringify({ type: 'measurement-result', ...result }));
       opStage = null;
+      // Reset the tap points immediately so the next measurement (on this
+      // photo or the next one) starts from a clean slate.
+      opCalibPts = []; opTargetPts = [];
       if (canvas === photoOverlay) {
         if (ws) ws.send(JSON.stringify({ type: 'remote-photo-done' }));
         photoCancelRow.style.display = 'none';
@@ -1228,6 +1541,10 @@ $('opCalibConfirmBtn').addEventListener('click', () => {
   if (activeCanvas === liveMeasureOverlay) {
     liveMeasureBanner.textContent = 'Now tap the two points you want to measure between.';
   }
+  const refLabel = opRefObjectSelect.value === 'custom'
+    ? `custom ${inches}in reference`
+    : opRefObjectSelect.options[opRefObjectSelect.selectedIndex].textContent;
+  calibStatus.textContent = `Scale locked from: ${refLabel} — ${opPxPerUnit.toFixed(1)} px/inch — set at ${new Date().toLocaleTimeString()}. This scale is only used for the measurement you're about to tap; the next one recalibrates from scratch.`;
 });
 
 $('cancelPhotoBtn').addEventListener('click', () => {
@@ -1241,12 +1558,20 @@ $('cancelPhotoBtn').addEventListener('click', () => {
 });
 
 // ---------- Tab switching ----------
+// Room picker only makes sense while you're measuring/photographing —
+// hide it on Floor Plan and Checklist so it doesn't imply you can change
+// rooms from there (switching rooms never ends the session either way).
+const roomBarEl = $('roomBar');
+const tabsBarEl = document.querySelector('.tabs');
 document.querySelectorAll('.tab-btn').forEach((btn) => {
   btn.addEventListener('click', () => {
     document.querySelectorAll('.tab-btn').forEach((b) => b.classList.remove('active'));
     document.querySelectorAll('.tab-panel').forEach((p) => { p.style.display = 'none'; });
     btn.classList.add('active');
     $('tab-' + btn.dataset.tab).style.display = 'block';
+    const onMeasureTab = btn.dataset.tab === 'measure';
+    roomBarEl.style.display = onMeasureTab ? '' : 'none';
+    tabsBarEl.classList.toggle('no-room-bar', !onMeasureTab);
   });
 });
 
