@@ -186,6 +186,13 @@ const ws = new WebSocket(`${wsProto}://${location.host}`);
 let pc = null;
 let localStream = null;
 let currentFacing = 'environment';
+// "Perfect negotiation" glare guard: if your camera permission resolves
+// quickly, this page can self-trigger an offer (see onnegotiationneeded
+// below) at roughly the same moment the operator sends its own initial
+// offer. Homeowner is the "polite" side — it yields (rolls back) instead
+// of throwing when that collision happens; see operator.html for the
+// impolite counterpart.
+let makingOffer = false;
 
 // Camera permission can resolve (and trigger ICE gathering / renegotiation)
 // before this signaling socket finishes connecting, especially on a slow
@@ -298,13 +305,26 @@ ws.addEventListener('message', async (ev) => {
   } else if (msg.type === 'peer-left' && msg.role === 'operator') {
     setStatus('Assessor disconnected', false);
   } else if (msg.type === 'offer') {
+    // Can collide with an offer we sent ourselves (see onnegotiationneeded
+    // below) if camera permission resolved fast. As the polite side, we
+    // always yield: roll back our own offer and accept theirs instead of
+    // letting setRemoteDescription throw and silently break the call.
     await ensurePC();
+    const offerCollision = makingOffer || pc.signalingState !== 'stable';
+    if (offerCollision) {
+      await pc.setLocalDescription({ type: 'rollback' });
+    }
     await pc.setRemoteDescription(new RTCSessionDescription(msg.sdp));
     const answer = await pc.createAnswer();
     await pc.setLocalDescription(answer);
     wsSend({ type: 'answer', sdp: pc.localDescription });
   } else if (msg.type === 'answer') {
-    if (pc) await pc.setRemoteDescription(new RTCSessionDescription(msg.sdp));
+    // A stale answer can arrive after we've already rolled back our own
+    // offer during a collision — only apply it if we're still waiting.
+    if (pc && pc.signalingState === 'have-local-offer') {
+      try { await pc.setRemoteDescription(new RTCSessionDescription(msg.sdp)); }
+      catch (e) { console.warn('Could not apply answer', e); }
+    }
   } else if (msg.type === 'ice-candidate') {
     if (pc && msg.candidate) {
       try { await pc.addIceCandidate(msg.candidate); } catch (e) { console.warn(e); }
@@ -355,18 +375,16 @@ async function ensurePC() {
   // doesn't take effect on its own — it fires negotiationneeded, and this
   // handler is what actually renegotiates so the operator ends up
   // receiving the video.
-  let negotiating = false;
   pc.onnegotiationneeded = async () => {
-    if (negotiating) return;
-    negotiating = true;
     try {
+      makingOffer = true;
       const offer = await pc.createOffer();
       await pc.setLocalDescription(offer);
       wsSend({ type: 'offer', sdp: pc.localDescription });
     } catch (e) {
       console.warn('renegotiation failed', e);
     } finally {
-      negotiating = false;
+      makingOffer = false;
     }
   };
 }
