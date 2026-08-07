@@ -107,6 +107,14 @@
   .room-group .room-line { font-size:11.5px; color:#ccc; display:flex; justify-content:space-between; padding:2px 0; }
   .room-group .room-line .rl-label { color:#999; }
   .room-group .room-line.unlabeled .rl-label { color:#c0392b; }
+  #floorPlanGrid { display:flex; flex-wrap:wrap; gap:14px; align-items:flex-end; }
+  .fp-card { display:flex; flex-direction:column; align-items:center; }
+  .fp-box { background:#12151a; border:2px solid #3a4048; border-radius:4px; position:relative; min-width:60px; min-height:60px; display:flex; flex-wrap:wrap; align-content:flex-start; gap:3px; padding:4px; overflow:hidden; }
+  .fp-box.estimated { border-style:dashed; }
+  .fp-box img { width:28px; height:28px; object-fit:cover; border-radius:3px; border:1px solid #262a31; }
+  .fp-label { font-size:11px; font-weight:700; color:#8ab4ff; margin-top:6px; text-align:center; max-width:160px; }
+  .fp-dims { font-size:10.5px; color:#888; text-align:center; }
+  .fp-photo-count { font-size:10px; color:#666; text-align:center; }
 
   #checklistReminder {
     display:none; background:#3a2a0d; border:1px solid #6b4a12; color:#ffd38a;
@@ -249,6 +257,7 @@
 
     <div class="tabs">
       <button class="tab-btn active" data-tab="measure">Measures + Photos</button>
+      <button class="tab-btn" data-tab="floorplan">Floor Plan</button>
       <button class="tab-btn" data-tab="checklist">Checklist</button>
     </div>
 
@@ -267,7 +276,8 @@
         <button id="liveMeasureBtn" class="secondary" style="flex:1;">Measure on Live Video</button>
         <button id="capturePhotoBtn" class="secondary" style="flex:1;">Capture Photo to Measure</button>
       </div>
-      <p class="hint">"Measure on Live Video" taps points right on the feed — no photo saved. "Capture Photo to Measure" freezes a frame first if you want a saved record. Switching rooms above never ends this session.</p>
+      <p class="hint">"Measure on Live Video" taps points right on the feed — no photo saved. "Capture Photo to Measure" freezes a frame first if you want a saved record. Switching rooms above never ends this session. Every measurement recalibrates its scale fresh from the reference object you tap — so it stays accurate as you move around, not just at one distance.</p>
+      <div id="calibStatus" class="hint" style="margin:0 0 10px;"></div>
 
       <div id="photoWrap">
         <img id="photoImg" />
@@ -317,6 +327,13 @@
       </div>
     </div>
 
+    <div class="tab-panel" id="tab-floorplan" style="display:none;">
+      <p class="hint">Rooms are drawn to scale from your "Width" and "Wall Length" tagged measurements, and photos are pinned to the room they were taken in. This is a scaled room-by-room layout for reference and record-keeping — not yet a connected walkthrough map (we don't capture which walls border which rooms).</p>
+      <div id="scaleReadout" class="hint" style="margin-top:0;"></div>
+      <div id="floorPlanGrid"></div>
+      <div id="floorPlanEmpty" class="hint" style="margin:0;">No rooms yet. Tag a measurement "Width" or "Wall Length" (or just take a photo) in a room to add it here.</div>
+    </div>
+
     <div class="tab-panel" id="tab-checklist" style="display:none;">
       <button id="listenBtn" class="secondary">Start Listening</button>
       <p class="hint">Uses your browser's built-in speech recognition — free, no account, but it's keyword matching, not true understanding. Check items manually any time.</p>
@@ -329,6 +346,12 @@
     </div>
   </div>
 </main>
+
+<!-- Free, self-hosted (no API key, no per-call cost) object classifier used to
+     suggest a room type from each captured photo. Runs entirely in this
+     browser tab; nothing is sent anywhere. -->
+<script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.20.0/dist/tf.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/mobilenet@2.1.1/dist/mobilenet.min.js"></script>
 
 <script>
 const $ = (id) => document.getElementById(id);
@@ -379,6 +402,10 @@ const roomMeasurementsEl = $('roomMeasurements');
 const roomMeasureEmpty = $('roomMeasureEmpty');
 const moodBox = $('moodBox');
 const moodEmoji = $('moodEmoji');
+const calibStatus = $('calibStatus');
+const floorPlanGrid = $('floorPlanGrid');
+const floorPlanEmpty = $('floorPlanEmpty');
+const scaleReadout = $('scaleReadout');
 const assessorSelect = $('assessorSelect');
 let currentAssessor = '';
 
@@ -482,6 +509,16 @@ function connectWS() {
         pendingMeasurePhoto = addGalleryPhoto(msg.image, 'measure');
         showReceivedPhoto(msg.image);
       }
+      takePhotoBtn.textContent = 'Take Photo';
+      takePhotoBtn.disabled = false;
+      capturePhotoBtn.textContent = 'Capture Photo to Measure';
+      capturePhotoBtn.disabled = false;
+    } else if (msg.type === 'photo-capture-failed') {
+      takePhotoBtn.textContent = 'Take Photo';
+      takePhotoBtn.disabled = false;
+      capturePhotoBtn.textContent = 'Capture Photo to Measure';
+      capturePhotoBtn.disabled = false;
+      alert('Photo didn\'t come through: ' + (msg.reason || 'unknown issue on the homeowner\'s device') + '. Ask them to make sure their camera is on, then try again.');
     } else if (msg.type === 'speech-transcript') {
       matchChecklist(msg.text, 'homeowner');
     } else if (msg.type === 'customer-mood') {
@@ -585,6 +622,7 @@ function addMeasurement(msg) {
   const entry = { ...msg, time: Date.now(), userLabel: '', room: currentRoom || 'Unassigned' };
   measurementLog.push(entry);
   renderRoomMeasurements();
+  renderFloorPlan();
   empty.remove();
   const card = document.createElement('div');
   card.className = 'measure-card';
@@ -612,6 +650,7 @@ function addMeasurement(msg) {
       tagRow.querySelectorAll('.tag-btn').forEach((b) => b.classList.toggle('active', b === btn));
       tagMissing.style.display = 'none';
       renderRoomMeasurements();
+      renderFloorPlan();
     });
     tagRow.appendChild(btn);
   });
@@ -667,6 +706,145 @@ function renderRoomMeasurements() {
   });
 }
 
+// ---------- Floor plan (scaled room footprints from real measurements) ----------
+const FOOTPRINT_TAGS = ['Width', 'Wall Length'];
+const PX_PER_FOOT = 14;
+const FP_MIN_PX = 60;
+const FP_MAX_PX = 320;
+
+function metersToFeet(m) { return m * 3.28084; }
+
+function renderFloorPlan() {
+  const rooms = {}; // room name -> { measurements: [], photoCount, dims: [feet,...] }
+  measurementLog.forEach((m) => {
+    const room = m.room || 'Unassigned';
+    if (!rooms[room]) rooms[room] = { dims: [], photoCount: 0 };
+    if (FOOTPRINT_TAGS.includes(m.userLabel) && m.distanceMeters) {
+      rooms[room].dims.push(metersToFeet(m.distanceMeters));
+    }
+  });
+  sessionPhotos.forEach((p) => {
+    const room = p.room || 'Unassigned';
+    if (!rooms[room]) rooms[room] = { dims: [], photoCount: 0 };
+    rooms[room].photoCount++;
+  });
+
+  const roomNames = Object.keys(rooms);
+  if (!roomNames.length) {
+    floorPlanGrid.innerHTML = '';
+    floorPlanEmpty.style.display = '';
+    scaleReadout.textContent = '';
+    return;
+  }
+  floorPlanEmpty.style.display = 'none';
+  scaleReadout.textContent = `Scale: ${PX_PER_FOOT}px = 1 ft, based on measurements tagged "Width" or "Wall Length".`;
+
+  floorPlanGrid.innerHTML = '';
+  roomNames.forEach((room) => {
+    const info = rooms[room];
+    const dimsSorted = info.dims.slice().sort((a, b) => b - a);
+    let w, d, estimated;
+    if (dimsSorted.length >= 2) {
+      w = dimsSorted[0]; d = dimsSorted[1]; estimated = false;
+    } else if (dimsSorted.length === 1) {
+      w = dimsSorted[0]; d = dimsSorted[0]; estimated = true;
+    } else {
+      w = null; d = null; estimated = true;
+    }
+    const boxW = w ? Math.max(FP_MIN_PX, Math.min(FP_MAX_PX, w * PX_PER_FOOT)) : FP_MIN_PX;
+    const boxD = d ? Math.max(FP_MIN_PX, Math.min(FP_MAX_PX, d * PX_PER_FOOT)) : FP_MIN_PX;
+
+    const card = document.createElement('div');
+    card.className = 'fp-card';
+    const box = document.createElement('div');
+    box.className = 'fp-box' + (estimated ? ' estimated' : '');
+    box.style.width = boxW + 'px';
+    box.style.height = boxD + 'px';
+
+    const roomPhotos = sessionPhotos.filter((p) => (p.room || 'Unassigned') === room).slice(0, 12);
+    roomPhotos.forEach((p) => {
+      const img = document.createElement('img');
+      img.src = p.dataUrl;
+      img.title = p.description || '';
+      box.appendChild(img);
+    });
+
+    const dimsText = w ? `${Math.round(w * 10) / 10}ft × ${Math.round(d * 10) / 10}ft${estimated ? ' (~est., only one wall tagged)' : ''}` : 'Not measured yet';
+
+    card.appendChild(box);
+    const labelEl = document.createElement('div');
+    labelEl.className = 'fp-label';
+    labelEl.textContent = room;
+    card.appendChild(labelEl);
+    const dimsEl = document.createElement('div');
+    dimsEl.className = 'fp-dims';
+    dimsEl.textContent = dimsText;
+    card.appendChild(dimsEl);
+    const countEl = document.createElement('div');
+    countEl.className = 'fp-photo-count';
+    countEl.textContent = `${info.photoCount} photo${info.photoCount === 1 ? '' : 's'}`;
+    card.appendChild(countEl);
+
+    floorPlanGrid.appendChild(card);
+  });
+}
+
+// ---------- Free client-side room auto-label (TensorFlow.js MobileNet) ----------
+// MobileNet is an object classifier (ImageNet's 1000 classes), not a room/
+// scene classifier, so this is a best-effort heuristic: look at what objects
+// it sees in the photo and map common ones to the room they usually live in.
+// Runs entirely in this browser tab — no API key, no per-photo cost, nothing
+// leaves the device. It's a suggestion the assessor can ignore; it never
+// overwrites the actual room tag on its own.
+const ROOM_HINTS = [
+  { room: 'Kitchen', keywords: ['refrigerator', 'icebox', 'microwave', 'dishwasher', 'toaster', 'stove', 'oven', 'rotisserie', 'espresso maker', 'washer', 'coffeepot', 'frying pan', 'wok', 'cleaver'] },
+  { room: 'Bathroom', keywords: ['shower curtain', 'toilet', 'tub', 'bathtub', 'medicine chest', 'medicine cabinet', 'washbasin', 'soap dispenser', 'hand blower'] },
+  { room: 'Bedroom', keywords: ['four-poster', 'cradle', 'crib', 'quilt', 'pillow', 'bassinet'] },
+  { room: 'Living Room', keywords: ['studio couch', 'day bed', 'entertainment center', 'television', 'fireplace', 'home theater', 'rocking chair', 'throne'] },
+  { room: 'Office/Den', keywords: ['desk', 'file cabinet', 'filing cabinet', 'bookcase', 'desktop computer', 'notebook computer', 'printer', 'typewriter'] },
+  { room: 'Laundry Room', keywords: ['washing machine', 'washer, automatic washer', 'clothes iron'] },
+  { room: 'Garage', keywords: ['garage door', 'pickup', 'tow truck', 'snowplow', 'moped', 'tool kit'] },
+];
+
+let mobilenetModelPromise = null;
+function getMobilenetModel() {
+  if (!mobilenetModelPromise) {
+    if (typeof mobilenet === 'undefined') {
+      mobilenetModelPromise = Promise.reject(new Error('MobileNet library did not load'));
+    } else {
+      mobilenetModelPromise = mobilenet.load();
+    }
+  }
+  return mobilenetModelPromise;
+}
+
+function guessRoomFromPredictions(predictions) {
+  for (const pred of predictions) {
+    const className = pred.className.toLowerCase();
+    for (const hint of ROOM_HINTS) {
+      if (hint.keywords.some((kw) => className.includes(kw))) return hint.room;
+    }
+  }
+  return null;
+}
+
+function suggestRoomFromPhoto(dataUrl, entryDiv) {
+  getMobilenetModel().then((model) => {
+    const img = entryDiv.querySelector('img');
+    const run = () => {
+      model.classify(img).then((predictions) => {
+        const guess = guessRoomFromPredictions(predictions);
+        if (!guess) return;
+        const badge = document.createElement('div');
+        badge.style.cssText = 'font-size:10.5px;color:#3ecf5f;margin-bottom:4px;';
+        badge.textContent = `AI guess: ${guess} (unconfirmed — tap Room above to set it for real)`;
+        entryDiv.insertBefore(badge, entryDiv.querySelector('.photo-desc'));
+      }).catch((e) => console.warn('Room classify failed', e));
+    };
+    if (img.complete) run(); else img.addEventListener('load', run, { once: true });
+  }).catch((e) => console.warn('MobileNet unavailable, skipping room suggestion', e));
+}
+
 // ---------- Photo memory bank ----------
 function addGalleryPhoto(dataUrl, mode) {
   const entry = { id: ++photoCounter, dataUrl, time: new Date(), description: '', mode, measurement: null, room: currentRoom || 'Unassigned' };
@@ -685,6 +863,8 @@ function addGalleryPhoto(dataUrl, mode) {
   const textarea = div.querySelector('.photo-desc');
   textarea.addEventListener('input', () => { entry.description = textarea.value; });
   photoGallery.prepend(div);
+  renderFloorPlan();
+  suggestRoomFromPhoto(dataUrl, div);
   return entry;
 }
 
@@ -1104,7 +1284,10 @@ function beginCalibration(canvas, ctx) {
   opCalibPts = []; opTargetPts = []; opPxPerUnit = null;
   opStage = 'calib';
   ctx.clearRect(0, 0, canvas.width, canvas.height);
-  opRefObjectSelect.value = 'custom';
+  // Default to the interior door: it's the one reference object almost
+  // always in frame no matter which room you're in, so most calibrations
+  // need zero extra taps to pick something from the list.
+  opRefObjectSelect.value = 'interiorDoor';
   updateRefObjectUI();
 }
 
@@ -1262,6 +1445,10 @@ $('opCalibConfirmBtn').addEventListener('click', () => {
   if (activeCanvas === liveMeasureOverlay) {
     liveMeasureBanner.textContent = 'Now tap the two points you want to measure between.';
   }
+  const refLabel = opRefObjectSelect.value === 'custom'
+    ? `custom ${inches}in reference`
+    : opRefObjectSelect.options[opRefObjectSelect.selectedIndex].textContent;
+  calibStatus.textContent = `Scale locked from: ${refLabel} — ${opPxPerUnit.toFixed(1)} px/inch — set at ${new Date().toLocaleTimeString()}. This scale is only used for the measurement you're about to tap; the next one recalibrates from scratch.`;
 });
 
 $('cancelPhotoBtn').addEventListener('click', () => {
