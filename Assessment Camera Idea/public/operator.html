@@ -421,6 +421,14 @@ assessorSelect.addEventListener('change', () => {
 });
 
 let ws, pc, roomId, localStream = null;
+// "Perfect negotiation" glare guard: the operator always sends the first
+// offer, and the homeowner can also self-trigger one the moment their
+// camera permission resolves. If both happen close together, whichever
+// side receives an offer while it's mid-offer needs to yield instead of
+// throwing — operator is "impolite" (its own offer wins a collision),
+// homeowner is the polite counterpart (see homeowner.html).
+let makingOffer = false;
+const polite = false;
 let cameraOn = false;
 let videoSender = null;
 let audioSender = null;
@@ -466,21 +474,35 @@ function connectWS() {
     const msg = JSON.parse(ev.data);
     if (msg.type === 'peer-joined' && msg.role === 'homeowner') {
       setStatus('Homeowner connected — negotiating video…', false);
+      // Just create the connection — ensurePC() always gives it something
+      // to negotiate (your camera track if it's on, or a receive-only slot
+      // if it's not), so onnegotiationneeded fires the actual offer below.
       await ensurePC();
-      const offer = await pc.createOffer();
-      await pc.setLocalDescription(offer);
-      ws.send(JSON.stringify({ type: 'offer', sdp: pc.localDescription }));
       sendAssessorName();
     } else if (msg.type === 'peer-left' && msg.role === 'homeowner') {
       setStatus('Homeowner disconnected', false);
       remoteVideo.srcObject = null;
     } else if (msg.type === 'answer') {
-      if (pc) await pc.setRemoteDescription(new RTCSessionDescription(msg.sdp));
+      // A stale answer can arrive after we've already rolled back our own
+      // offer during a collision — only apply it if we're actually still
+      // waiting on one.
+      if (pc && pc.signalingState === 'have-local-offer') {
+        try { await pc.setRemoteDescription(new RTCSessionDescription(msg.sdp)); }
+        catch (e) { console.warn('Could not apply answer', e); }
+      }
     } else if (msg.type === 'offer') {
       // The homeowner's camera permission prompt can resolve after the
       // initial handshake completes, in which case their page renegotiates
       // by sending us a fresh offer so their video actually gets through.
+      // This can race with our own offer (see peer-joined above) — handle
+      // that collision instead of letting setRemoteDescription throw and
+      // silently kill that side's video.
       await ensurePC();
+      const offerCollision = makingOffer || pc.signalingState !== 'stable';
+      if (!polite && offerCollision) return; // our own offer wins; homeowner will yield
+      if (offerCollision) {
+        await pc.setLocalDescription({ type: 'rollback' });
+      }
       await pc.setRemoteDescription(new RTCSessionDescription(msg.sdp));
       const answer = await pc.createAnswer();
       await pc.setLocalDescription(answer);
@@ -533,7 +555,16 @@ function connectWS() {
 async function ensurePC() {
   if (pc) return;
   pc = new RTCPeerConnection({ iceServers: window.HUD_ICE_SERVERS });
-  if (localStream) localStream.getTracks().forEach((t) => pc.addTrack(t, localStream));
+  if (localStream) {
+    localStream.getTracks().forEach((t) => pc.addTrack(t, localStream));
+  } else {
+    // A brand-new connection with nothing added never fires
+    // negotiationneeded on its own — add empty receive-only slots so the
+    // very first offer still goes out (and so it has somewhere for the
+    // homeowner's video to land even before you turn your own camera on).
+    pc.addTransceiver('video', { direction: 'recvonly' });
+    pc.addTransceiver('audio', { direction: 'recvonly' });
+  }
   pc.onicecandidate = (e) => {
     if (e.candidate) ws.send(JSON.stringify({ type: 'ice-candidate', candidate: e.candidate }));
   };
@@ -544,6 +575,21 @@ async function ensurePC() {
   pc.onconnectionstatechange = () => {
     if (pc.connectionState === 'connected') setStatus('Live', true);
     if (['disconnected','failed','closed'].includes(pc.connectionState)) setStatus('Connection lost', false);
+  };
+  // Fires for the initial offer above, and again any time tracks change
+  // later (e.g. turning your camera on/off mid-call) — without this,
+  // post-connection camera toggles never actually reach the homeowner.
+  pc.onnegotiationneeded = async () => {
+    try {
+      makingOffer = true;
+      const offer = await pc.createOffer();
+      await pc.setLocalDescription(offer);
+      ws.send(JSON.stringify({ type: 'offer', sdp: pc.localDescription }));
+    } catch (e) {
+      console.warn('renegotiation failed', e);
+    } finally {
+      makingOffer = false;
+    }
   };
 }
 
