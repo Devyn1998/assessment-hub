@@ -55,6 +55,7 @@
   #roomCustomInput { width:100%; padding:9px 10px; border-radius:8px; border:1px solid #2b2e36; background:#0d0e12; color:#eee; font-size:13px; margin-top:6px; display:none; }
 
   .tabs { display:flex; background:#14161b; border-left:1px solid #23262d; border-right:1px solid #23262d; padding:4px; gap:4px; }
+  .tabs.no-room-bar { border-top:1px solid #23262d; border-radius:12px 12px 0 0; }
   .tab-btn { flex:1; background:transparent; color:#9a9ca3; padding:9px 6px; font-size:12.5px; font-weight:600; border-radius:8px; }
   .tab-btn.active { background:#2a2d34; color:#fff; }
 
@@ -231,7 +232,7 @@
   </div>
 
   <div class="side-col">
-    <div class="room-bar">
+    <div class="room-bar" id="roomBar">
       <label>Room</label>
       <select id="roomSelect">
         <option value="">Select room…</option>
@@ -618,6 +619,20 @@ $('newBtn').addEventListener('click', () => {
 
 const MEASURE_TAGS = ['Width', 'Height', 'Ceiling Height', 'Wall Length'];
 
+function measureLabelText(entry) {
+  return `${entry.userLabel ? entry.userLabel : 'Measured'}: ${entry.label || ''}`;
+}
+
+// Every measurement — still, live, or AR — ends up attached to the photo it
+// came from (entry.photoEntry <-> photoEntry.measurement) so tagging one
+// updates the other and nothing drifts apart in the Photo Memory Bank.
+function attachMeasurementToPhoto(entry, photoEntry) {
+  entry.photoEntry = photoEntry;
+  photoEntry.measurement = entry;
+  photoEntry.measureEl.textContent = measureLabelText(entry);
+  photoEntry.measureEl.style.display = '';
+}
+
 function addMeasurement(msg) {
   const entry = { ...msg, time: Date.now(), userLabel: '', room: currentRoom || 'Unassigned' };
   measurementLog.push(entry);
@@ -638,6 +653,11 @@ function addMeasurement(msg) {
     const img = document.createElement('img');
     img.src = msg.thumb;
     card.appendChild(img);
+    // AR measurements arrive with their own snapshot already — file it in
+    // the Photo Memory Bank right away so the photo and its measurement
+    // travel together instead of living only in this side log.
+    const photoEntry = addGalleryPhoto(msg.thumb, 'measure');
+    attachMeasurementToPhoto(entry, photoEntry);
   }
   const tagRow = card.querySelector('.tag-row');
   const tagMissing = card.querySelector('.tag-missing');
@@ -649,6 +669,7 @@ function addMeasurement(msg) {
       entry.userLabel = tag;
       tagRow.querySelectorAll('.tag-btn').forEach((b) => b.classList.toggle('active', b === btn));
       tagMissing.style.display = 'none';
+      if (entry.photoEntry) entry.photoEntry.measureEl.textContent = measureLabelText(entry);
       renderRoomMeasurements();
       renderFloorPlan();
     });
@@ -1144,7 +1165,7 @@ function buildAndDownloadReport() {
     <div style="background:#f7f7f7;border:1px solid #ddd;border-radius:10px;padding:12px;margin-bottom:16px;">
       <img src="${p.dataUrl}" style="max-width:100%;border-radius:6px;display:block;margin-bottom:8px;" />
       <div style="font-size:12px;color:#666;">${escapeHtml(p.room || 'Unassigned')} · ${p.time.toLocaleString()}${p.mode === 'measure' ? ' · Measurement photo' : ''}</div>
-      ${p.measurement ? `<div style="font-weight:700;color:#1e6fe0;margin-top:4px;">Measured: ${escapeHtml(p.measurement.label)} (${p.measurement.distanceMeters} m)</div>` : ''}
+      ${p.measurement ? `<div style="font-weight:700;color:#1e6fe0;margin-top:4px;">${escapeHtml(p.measurement.userLabel || 'Measured')}: ${escapeHtml(p.measurement.label)} (${p.measurement.distanceMeters} m)</div>` : ''}
       ${p.description ? `<div style="margin-top:8px;white-space:pre-wrap;">${escapeHtml(p.description)}</div>` : '<div style="margin-top:8px;color:#999;font-style:italic;">No description added.</div>'}
     </div>
   `).join('');
@@ -1272,6 +1293,23 @@ let activeCanvas = null;
 let activeCtx = null;
 let liveMeasureActive = false;
 
+// Grabs a still frame from a live <video> element (used to save a photo
+// alongside a "Measure on Live Video" result, since that flow doesn't
+// otherwise capture one).
+function snapshotVideoFrame(videoEl) {
+  if (!videoEl || !videoEl.videoWidth) return null;
+  try {
+    const c = document.createElement('canvas');
+    c.width = videoEl.videoWidth;
+    c.height = videoEl.videoHeight;
+    c.getContext('2d').drawImage(videoEl, 0, 0, c.width, c.height);
+    return c.toDataURL('image/jpeg', 0.85);
+  } catch (e) {
+    console.warn('Could not snapshot live video frame', e);
+    return null;
+  }
+}
+
 function updateRefObjectUI() {
   opCustomLenRow.style.display = opRefObjectSelect.value === 'custom' ? 'block' : 'none';
 }
@@ -1379,15 +1417,27 @@ function onMeasureCanvasClick(e) {
       const meters = inches * 0.0254;
       const f = formatMeters(meters);
       const result = { mode: 'manual', distanceMeters: f.meters, label: f.label };
-      addMeasurement(result);
-      if (pendingMeasurePhoto) {
-        pendingMeasurePhoto.measurement = result;
-        pendingMeasurePhoto.measureEl.textContent = `Measured: ${result.label}`;
-        pendingMeasurePhoto.measureEl.style.display = '';
+      const entry = addMeasurement(result);
+      if (canvas === photoOverlay && pendingMeasurePhoto) {
+        // Still-photo flow: the photo was already saved when it was captured —
+        // just link this measurement to it.
+        attachMeasurementToPhoto(entry, pendingMeasurePhoto);
         pendingMeasurePhoto = null;
+      } else if (canvas === liveMeasureOverlay) {
+        // Live-video flow: no photo exists yet, so grab a frame right now and
+        // file it in the Photo Memory Bank with the measurement attached, so
+        // the two never end up separated.
+        const snapUrl = snapshotVideoFrame(remoteVideo);
+        if (snapUrl) {
+          const photoEntry = addGalleryPhoto(snapUrl, 'measure');
+          attachMeasurementToPhoto(entry, photoEntry);
+        }
       }
       if (ws) ws.send(JSON.stringify({ type: 'measurement-result', ...result }));
       opStage = null;
+      // Reset the tap points immediately so the next measurement (on this
+      // photo or the next one) starts from a clean slate.
+      opCalibPts = []; opTargetPts = [];
       if (canvas === photoOverlay) {
         if (ws) ws.send(JSON.stringify({ type: 'remote-photo-done' }));
         photoCancelRow.style.display = 'none';
@@ -1462,12 +1512,20 @@ $('cancelPhotoBtn').addEventListener('click', () => {
 });
 
 // ---------- Tab switching ----------
+// Room picker only makes sense while you're measuring/photographing —
+// hide it on Floor Plan and Checklist so it doesn't imply you can change
+// rooms from there (switching rooms never ends the session either way).
+const roomBarEl = $('roomBar');
+const tabsBarEl = document.querySelector('.tabs');
 document.querySelectorAll('.tab-btn').forEach((btn) => {
   btn.addEventListener('click', () => {
     document.querySelectorAll('.tab-btn').forEach((b) => b.classList.remove('active'));
     document.querySelectorAll('.tab-panel').forEach((p) => { p.style.display = 'none'; });
     btn.classList.add('active');
     $('tab-' + btn.dataset.tab).style.display = 'block';
+    const onMeasureTab = btn.dataset.tab === 'measure';
+    roomBarEl.style.display = onMeasureTab ? '' : 'none';
+    tabsBarEl.classList.toggle('no-room-bar', !onMeasureTab);
   });
 });
 
