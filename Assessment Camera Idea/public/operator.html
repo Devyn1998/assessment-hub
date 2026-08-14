@@ -84,6 +84,9 @@
   #opCalibForm { display:none; background:#0d0e11; border:1px solid #262a31; border-radius:8px; padding:10px; margin-top:10px; }
   #opCalibForm input { width:100%; padding:8px; border-radius:6px; border:1px solid #333; background:#15171b; color:#eee; font-size:14px; margin:6px 0; }
   #opCalibForm select { width:100%; padding:8px; border-radius:6px; border:1px solid #333; background:#15171b; color:#eee; font-size:14px; margin:6px 0; }
+  #opCustomRectRow { display:none; gap:6px; align-items:center; }
+  #opCustomRectRow input { width:auto; flex:1; }
+  #opCustomRectRow select { width:auto; flex:0 0 90px; }
   #photoCancelRow { display:none; gap:8px; margin-top:8px; }
   #liveMeasureOverlay { position:absolute; inset:0; width:100%; height:100%; pointer-events:none; z-index:5; }
   #liveMeasureOverlay.active { pointer-events:auto; cursor:crosshair; }
@@ -108,14 +111,24 @@
   .room-group .room-line { font-size:11.5px; color:#ccc; display:flex; justify-content:space-between; padding:2px 0; }
   .room-group .room-line .rl-label { color:#999; }
   .room-group .room-line.unlabeled .rl-label { color:#c0392b; }
-  #floorPlanGrid { display:flex; flex-wrap:wrap; gap:14px; align-items:flex-end; }
-  .fp-card { display:flex; flex-direction:column; align-items:center; }
+  #floorPlanGrid { display:grid; grid-template-columns: repeat(auto-fill, minmax(190px, 1fr)); gap:16px; align-items:start; }
+  .fp-card { display:flex; flex-direction:column; align-items:center; background:#0d0e11; border:1px solid #262a31; border-radius:10px; padding:10px; }
   .fp-box { background:#12151a; border:2px solid #3a4048; border-radius:4px; position:relative; min-width:60px; min-height:60px; display:flex; flex-wrap:wrap; align-content:flex-start; gap:3px; padding:4px; overflow:hidden; }
   .fp-box.estimated { border-style:dashed; }
-  .fp-box img { width:28px; height:28px; object-fit:cover; border-radius:3px; border:1px solid #262a31; }
-  .fp-label { font-size:11px; font-weight:700; color:#8ab4ff; margin-top:6px; text-align:center; max-width:160px; }
+  .fp-box img { width:28px; height:28px; object-fit:cover; border-radius:3px; border:1px solid #262a31; cursor:zoom-in; }
+  .fp-label { font-size:11.5px; font-weight:700; color:#8ab4ff; margin-top:8px; text-align:center; max-width:170px; }
   .fp-dims { font-size:10.5px; color:#888; text-align:center; }
-  .fp-photo-count { font-size:10px; color:#666; text-align:center; }
+  .fp-photo-count { font-size:10px; color:#666; text-align:center; margin-bottom:4px; }
+  .fp-measurements { margin-top:8px; width:100%; }
+  .fp-measure-line { font-size:10.5px; color:#ccc; display:flex; justify-content:space-between; gap:6px; padding:3px 0; border-bottom:1px solid #1c1f26; }
+  .fp-measure-line .fp-m-label { color:#999; white-space:nowrap; }
+  .fp-measure-line .fp-m-val { text-align:right; }
+  .fp-conf { display:block; color:#7fae7f; font-size:9px; }
+  .fp-photos { margin-top:8px; width:100%; display:flex; flex-direction:column; gap:6px; }
+  .fp-photo-row { display:flex; gap:6px; background:#0a0b0e; border:1px solid #1c1f26; border-radius:6px; padding:5px; }
+  .fp-photo-row img { width:36px; height:36px; object-fit:cover; border-radius:4px; flex:0 0 auto; cursor:zoom-in; }
+  .fp-photo-row .fp-note-text { font-size:10px; color:#999; line-height:1.35; align-self:center; }
+  .fp-photo-row .fp-note-text.empty { font-style:italic; color:#555; }
 
   #checklistReminder {
     display:none; background:#3a2a0d; border:1px solid #6b4a12; color:#ffd38a;
@@ -277,7 +290,7 @@
         <button id="liveMeasureBtn" class="secondary" style="flex:1;">Measure on Live Video</button>
         <button id="capturePhotoBtn" class="secondary" style="flex:1;">Capture Photo to Measure</button>
       </div>
-      <p class="hint">"Measure on Live Video" taps points right on the feed — no photo saved. "Capture Photo to Measure" freezes a frame first if you want a saved record. Switching rooms above never ends this session. Every measurement recalibrates its scale fresh from the reference object you tap — so it stays accurate as you move around, not just at one distance.</p>
+      <p class="hint">"Measure on Live Video" taps points right on the feed — no photo saved. "Capture Photo to Measure" freezes a frame first if you want a saved record. Tap the 4 corners of a reference object (a door works great and is usually already in frame) to lock in true scale and correct for camera angle, then tap the two points you want to measure — you'll get a distance plus a confidence read on how much to trust it. Switching rooms above never ends this session. Every measurement recalibrates fresh from the object you tap — so it stays accurate as you move around, not just at one distance.</p>
       <div id="calibStatus" class="hint" style="margin:0 0 10px;"></div>
 
       <div id="photoWrap">
@@ -285,28 +298,18 @@
         <canvas id="photoOverlay"></canvas>
       </div>
       <div id="opCalibForm">
-        <div style="font-size:13px;">Reference object for the yellow line:</div>
-        <select id="opRefObjectSelect">
-          <option value="custom">Custom length…</option>
-          <option value="switchPlate">Light switch / outlet plate (4.5 in)</option>
-          <option value="letterPaper">US Letter paper, long edge (11 in)</option>
-          <option value="dollarBill">Dollar bill, long edge (6.14 in)</option>
-          <option value="creditCard">Credit card, long edge (3.37 in)</option>
-          <option value="sodaCan">Soda can height (4.83 in)</option>
-          <option value="waterBottle">16.9oz water bottle height (8.3 in)</option>
-          <option value="interiorDoor">Standard interior door height (80 in)</option>
-          <option value="brick">Standard brick length (8 in)</option>
-          <option value="ruler12">12 inch ruler (hold one up)</option>
-        </select>
-        <div id="opCustomLenRow">
-          <input id="opCalibInput" type="number" step="0.1" placeholder="e.g. 36" />
+        <div style="font-size:13px;">Which object did you tap the 4 corners of?</div>
+        <select id="opRefObjectSelect"></select>
+        <div id="opCustomRectRow">
+          <input id="opCalibWidthInput" type="number" step="0.1" placeholder="Width e.g. 32" />
+          <input id="opCalibHeightInput" type="number" step="0.1" placeholder="Height e.g. 80" />
           <select id="opCalibUnit">
             <option value="in">inches</option>
             <option value="ft">feet</option>
           </select>
         </div>
         <div style="display:flex; margin-top:8px; gap:8px;">
-          <button class="secondary" id="opCalibCancelBtn">Cancel</button>
+          <button class="secondary" id="opCalibCancelBtn">Redo corners</button>
           <button id="opCalibConfirmBtn">Use this</button>
         </div>
       </div>
@@ -329,7 +332,7 @@
     </div>
 
     <div class="tab-panel" id="tab-floorplan" style="display:none;">
-      <p class="hint">Rooms are drawn to scale from your "Width" and "Wall Length" tagged measurements, and photos are pinned to the room they were taken in. This is a scaled room-by-room layout for reference and record-keeping — not yet a connected walkthrough map (we don't capture which walls border which rooms).</p>
+      <p class="hint">Rooms are drawn to scale from your "Width" and "Wall Length" tagged measurements. Each room card also lists every measurement taken there (with its confidence), and every photo with its description — everything from that room in one place. This is a scaled room-by-room layout for reference and record-keeping — not yet a connected walkthrough map (we don't capture which walls border which rooms).</p>
       <div id="scaleReadout" class="hint" style="margin-top:0;"></div>
       <div id="floorPlanGrid"></div>
       <div id="floorPlanEmpty" class="hint" style="margin:0;">No rooms yet. Tag a measurement "Width" or "Wall Length" (or just take a photo) in a room to add it here.</div>
@@ -376,10 +379,11 @@ const photoImg = $('photoImg');
 const photoOverlay = $('photoOverlay');
 const potx = photoOverlay.getContext('2d');
 const opCalibForm = $('opCalibForm');
-const opCalibInput = $('opCalibInput');
+const opCalibWidthInput = $('opCalibWidthInput');
+const opCalibHeightInput = $('opCalibHeightInput');
 const opCalibUnit = $('opCalibUnit');
 const opRefObjectSelect = $('opRefObjectSelect');
-const opCustomLenRow = $('opCustomLenRow');
+const opCustomRectRow = $('opCustomRectRow');
 const photoCancelRow = $('photoCancelRow');
 const videoWrap = $('videoWrap');
 const liveMeasureBtn = $('liveMeasureBtn');
@@ -666,7 +670,8 @@ $('newBtn').addEventListener('click', () => {
 const MEASURE_TAGS = ['Width', 'Height', 'Ceiling Height', 'Wall Length'];
 
 function measureLabelText(entry) {
-  return `${entry.userLabel ? entry.userLabel : 'Measured'}: ${entry.label || ''}`;
+  const base = `${entry.userLabel ? entry.userLabel : 'Measured'}: ${entry.label || ''}`;
+  return entry.confidenceText ? `${base} (${entry.confidenceText})` : base;
 }
 
 // Every measurement — still, live, or AR — ends up attached to the photo it
@@ -691,7 +696,7 @@ function addMeasurement(msg) {
   card.innerHTML = `
     <div class="mode">${modeLabel} · ${new Date().toLocaleTimeString()}</div>
     <div class="val">${msg.label || ''}</div>
-    <div class="sub">${msg.distanceMeters ? msg.distanceMeters + ' m' : ''}</div>
+    <div class="sub">${msg.distanceMeters ? msg.distanceMeters + ' m' : ''}${msg.confidenceText ? ' · ' + escapeHtml(msg.confidenceText) : ''}</div>
     <div class="tag-row"></div>
     <div class="tag-missing">Needs a label — tap one above</div>
   `;
@@ -766,7 +771,7 @@ function renderRoomMeasurements() {
     const lines = groups[room].map((m) => {
       const labelText = m.userLabel || (m.mode === 'ar' ? 'AR measurement' : 'Photo estimate');
       const unlabeled = !m.userLabel;
-      return `<div class="room-line${unlabeled ? ' unlabeled' : ''}"><span class="rl-label">${escapeHtml(labelText)}</span><span>${escapeHtml(m.label || '')}</span></div>`;
+      return `<div class="room-line${unlabeled ? ' unlabeled' : ''}"><span class="rl-label">${escapeHtml(labelText)}</span><span>${escapeHtml(m.label || '')}${m.confidenceText ? ' · ' + escapeHtml(m.confidenceText) : ''}</span></div>`;
     }).join('');
     div.innerHTML = `<div class="room-name">${escapeHtml(room)}</div>${lines}`;
     roomMeasurementsEl.appendChild(div);
@@ -785,14 +790,15 @@ function renderFloorPlan() {
   const rooms = {}; // room name -> { measurements: [], photoCount, dims: [feet,...] }
   measurementLog.forEach((m) => {
     const room = m.room || 'Unassigned';
-    if (!rooms[room]) rooms[room] = { dims: [], photoCount: 0 };
+    if (!rooms[room]) rooms[room] = { dims: [], photoCount: 0, measurements: [] };
+    rooms[room].measurements.push(m);
     if (FOOTPRINT_TAGS.includes(m.userLabel) && m.distanceMeters) {
       rooms[room].dims.push(metersToFeet(m.distanceMeters));
     }
   });
   sessionPhotos.forEach((p) => {
     const room = p.room || 'Unassigned';
-    if (!rooms[room]) rooms[room] = { dims: [], photoCount: 0 };
+    if (!rooms[room]) rooms[room] = { dims: [], photoCount: 0, measurements: [] };
     rooms[room].photoCount++;
   });
 
@@ -828,11 +834,12 @@ function renderFloorPlan() {
     box.style.width = boxW + 'px';
     box.style.height = boxD + 'px';
 
-    const roomPhotos = sessionPhotos.filter((p) => (p.room || 'Unassigned') === room).slice(0, 12);
-    roomPhotos.forEach((p) => {
+    const roomPhotos = sessionPhotos.filter((p) => (p.room || 'Unassigned') === room);
+    roomPhotos.slice(0, 12).forEach((p) => {
       const img = document.createElement('img');
       img.src = p.dataUrl;
       img.title = p.description || '';
+      img.addEventListener('click', () => window.open(p.dataUrl, '_blank'));
       box.appendChild(img);
     });
 
@@ -851,6 +858,40 @@ function renderFloorPlan() {
     countEl.className = 'fp-photo-count';
     countEl.textContent = `${info.photoCount} photo${info.photoCount === 1 ? '' : 's'}`;
     card.appendChild(countEl);
+
+    // Every measurement taken in this room, with its confidence — not just
+    // the Width/Wall Length ones used to size the box above.
+    if (info.measurements.length) {
+      const measEl = document.createElement('div');
+      measEl.className = 'fp-measurements';
+      measEl.innerHTML = info.measurements.map((m) => {
+        const labelText = m.userLabel || (m.mode === 'ar' ? 'AR measurement' : 'Photo estimate');
+        return `<div class="fp-measure-line"><span class="fp-m-label">${escapeHtml(labelText)}</span><span class="fp-m-val">${escapeHtml(m.label || '')}${m.confidenceText ? `<span class="fp-conf">${escapeHtml(m.confidenceText)}</span>` : ''}</span></div>`;
+      }).join('');
+      card.appendChild(measEl);
+    }
+
+    // Every photo taken in this room with its description, so the room
+    // card is a self-contained record — not just a scaled outline.
+    if (roomPhotos.length) {
+      const photosEl = document.createElement('div');
+      photosEl.className = 'fp-photos';
+      roomPhotos.forEach((p) => {
+        const row = document.createElement('div');
+        row.className = 'fp-photo-row';
+        const img = document.createElement('img');
+        img.src = p.dataUrl;
+        img.addEventListener('click', () => window.open(p.dataUrl, '_blank'));
+        const note = document.createElement('div');
+        const desc = (p.description || '').trim();
+        note.className = 'fp-note-text' + (desc ? '' : ' empty');
+        note.textContent = desc || 'No description added.';
+        row.appendChild(img);
+        row.appendChild(note);
+        photosEl.appendChild(row);
+      });
+      card.appendChild(photosEl);
+    }
 
     floorPlanGrid.appendChild(card);
   });
@@ -1211,7 +1252,7 @@ function buildAndDownloadReport() {
     <div style="background:#f7f7f7;border:1px solid #ddd;border-radius:10px;padding:12px;margin-bottom:16px;">
       <img src="${p.dataUrl}" style="max-width:100%;border-radius:6px;display:block;margin-bottom:8px;" />
       <div style="font-size:12px;color:#666;">${escapeHtml(p.room || 'Unassigned')} · ${p.time.toLocaleString()}${p.mode === 'measure' ? ' · Measurement photo' : ''}</div>
-      ${p.measurement ? `<div style="font-weight:700;color:#1e6fe0;margin-top:4px;">${escapeHtml(p.measurement.userLabel || 'Measured')}: ${escapeHtml(p.measurement.label)} (${p.measurement.distanceMeters} m)</div>` : ''}
+      ${p.measurement ? `<div style="font-weight:700;color:#1e6fe0;margin-top:4px;">${escapeHtml(p.measurement.userLabel || 'Measured')}: ${escapeHtml(p.measurement.label)} (${p.measurement.distanceMeters} m)${p.measurement.confidenceText ? ` — ${escapeHtml(p.measurement.confidenceText)}` : ''}</div>` : ''}
       ${p.description ? `<div style="margin-top:8px;white-space:pre-wrap;">${escapeHtml(p.description)}</div>` : '<div style="margin-top:8px;color:#999;font-style:italic;">No description added.</div>'}
     </div>
   `).join('');
@@ -1226,13 +1267,13 @@ function buildAndDownloadReport() {
     ? Object.keys(roomGroups).map((room) => `
       <div style="margin-bottom:14px;">
         <div style="font-weight:700; margin-bottom:4px;">${escapeHtml(room)}</div>
-        <ul>${roomGroups[room].map((m) => `<li>${m.userLabel ? `<strong>${escapeHtml(m.userLabel)}:</strong> ` : ''}${escapeHtml(m.label || '')} (${m.distanceMeters} m)${!m.userLabel ? ' <span style="color:#c0392b;">(unlabeled)</span>' : ''}</li>`).join('')}</ul>
+        <ul>${roomGroups[room].map((m) => `<li>${m.userLabel ? `<strong>${escapeHtml(m.userLabel)}:</strong> ` : ''}${escapeHtml(m.label || '')} (${m.distanceMeters} m)${m.confidenceText ? ` <span style="color:#1e7a3a;">[${escapeHtml(m.confidenceText)}]</span>` : ''}${!m.userLabel ? ' <span style="color:#c0392b;">(unlabeled)</span>' : ''}</li>`).join('')}</ul>
       </div>
     `).join('')
     : '<p style="color:#999;">No measurements recorded.</p>';
 
   const measurementsHtml = measurementLog.length
-    ? measurementLog.map((m) => `<li>${m.userLabel ? `<strong>${escapeHtml(m.userLabel)}:</strong> ` : ''}${m.mode === 'ar' ? 'AR Measurement' : 'Photo Estimate'} — <strong>${escapeHtml(m.label || '')}</strong> (${m.distanceMeters} m) — ${escapeHtml(m.room || 'Unassigned')} — ${new Date(m.time).toLocaleTimeString()}${!m.userLabel ? ' <span style="color:#c0392b;">(unlabeled)</span>' : ''}</li>`).join('')
+    ? measurementLog.map((m) => `<li>${m.userLabel ? `<strong>${escapeHtml(m.userLabel)}:</strong> ` : ''}${m.mode === 'ar' ? 'AR Measurement' : 'Photo Estimate'} — <strong>${escapeHtml(m.label || '')}</strong> (${m.distanceMeters} m)${m.confidenceText ? ` <span style="color:#1e7a3a;">[${escapeHtml(m.confidenceText)}]</span>` : ''} — ${escapeHtml(m.room || 'Unassigned')} — ${new Date(m.time).toLocaleTimeString()}${!m.userLabel ? ' <span style="color:#c0392b;">(unlabeled)</span>' : ''}</li>`).join('')
     : '<li style="color:#999;">No measurements recorded.</li>';
 
   const stateLabels = { checked: 'Checked', skipped: 'Skipped', na: 'N/A', pending: 'Not covered' };
@@ -1319,22 +1360,110 @@ endArBtn.addEventListener('click', () => {
 });
 
 // ---------- Reference-object measuring (live video or captured photo) ----------
+// Flat, rectangular objects only — a homography needs a real quadrilateral
+// with known width & height, so items like a soda can or a ruler (which
+// aren't planar rectangles) have been dropped in favor of the door, which
+// is almost always in frame anyway.
 const REF_LIBRARY = {
-  switchPlate: 4.5,
-  letterPaper: 11,
-  dollarBill: 6.14,
-  creditCard: 3.37,
-  sodaCan: 4.83,
-  waterBottle: 8.3,
-  interiorDoor: 80,
-  brick: 8,
-  ruler12: 12,
+  interiorDoor: { w: 32, h: 80, label: 'Standard interior door (32×80 in)' },
+  letterPaper: { w: 8.5, h: 11, label: 'US Letter paper (8.5×11 in)' },
+  switchPlate: { w: 2.75, h: 4.5, label: 'Light switch / outlet plate (2.75×4.5 in)' },
+  creditCard: { w: 2.125, h: 3.37, label: 'Credit card (2.125×3.37 in)' },
+  dollarBill: { w: 2.61, h: 6.14, label: 'Dollar bill (2.61×6.14 in)' },
+  brick: { w: 3.625, h: 8, label: 'Standard brick face (3.625×8 in)' },
 };
+
+function populateRefObjectSelect() {
+  const opts = Object.keys(REF_LIBRARY).map((k) => `<option value="${k}">${escapeHtml(REF_LIBRARY[k].label)}</option>`).join('');
+  opRefObjectSelect.innerHTML = opts + '<option value="custom">Custom rectangle…</option>';
+}
+populateRefObjectSelect();
+
+// ---------- Homography math (Direct Linear Transform) ----------
+// A single px-per-inch ratio only holds up if the object you tapped is
+// perfectly parallel to the camera sensor — tilt the phone and it quietly
+// over/under-estimates. Instead: tap all 4 corners of a known rectangle,
+// solve the projective transform (homography) that maps those 4 image
+// points onto the object's real (0,0)-(w,0)-(w,h)-(0,h) rectangle in
+// inches, then run any two tapped target points through that same
+// transform. That corrects for the camera angle instead of assuming it
+// away, which is what "projective transformation" measuring means.
+function solveLinear8(A, b) {
+  const n = 8;
+  const M = A.map((row, i) => [...row, b[i]]);
+  for (let col = 0; col < n; col++) {
+    let pivot = col;
+    for (let r = col + 1; r < n; r++) {
+      if (Math.abs(M[r][col]) > Math.abs(M[pivot][col])) pivot = r;
+    }
+    [M[col], M[pivot]] = [M[pivot], M[col]];
+    const pv = M[col][col] || 1e-9;
+    for (let r = 0; r < n; r++) {
+      if (r === col) continue;
+      const factor = M[r][col] / pv;
+      for (let c = col; c <= n; c++) M[r][c] -= factor * M[col][c];
+    }
+  }
+  return M.map((row, i) => row[n] / (row[i] || 1e-9));
+}
+
+function computeHomography(srcPts, dstPts) {
+  const A = [];
+  const b = [];
+  for (let i = 0; i < 4; i++) {
+    const sx = srcPts[i].x, sy = srcPts[i].y;
+    const dx = dstPts[i].x, dy = dstPts[i].y;
+    A.push([sx, sy, 1, 0, 0, 0, -sx * dx, -sy * dx]); b.push(dx);
+    A.push([0, 0, 0, sx, sy, 1, -sx * dy, -sy * dy]); b.push(dy);
+  }
+  const h = solveLinear8(A, b);
+  return [h[0], h[1], h[2], h[3], h[4], h[5], h[6], h[7], 1];
+}
+
+function applyHomography(H, pt) {
+  const w = H[6] * pt.x + H[7] * pt.y + H[8];
+  return { x: (H[0] * pt.x + H[1] * pt.y + H[2]) / w, y: (H[3] * pt.x + H[4] * pt.y + H[5]) / w };
+}
+
+// Honest confidence, not a made-up percentage: simulate small fingertip-
+// precision tap errors (±4px is typical on a phone/laptop screen) on both
+// the reference corners and the target points, recompute the distance each
+// time, and report how much that jitter actually moved the answer. A
+// steep viewing angle or a small reference object amplifies tap noise into
+// a bigger real-world swing — this reflects that directly instead of
+// asserting a number that isn't grounded in anything.
+function estimateMeasurementUncertainty(refImgPts, refRealPts, targetImgPts, jitterPx) {
+  const trials = 24;
+  const distances = [];
+  for (let t = 0; t < trials; t++) {
+    const jRef = refImgPts.map((p) => ({ x: p.x + (Math.random() * 2 - 1) * jitterPx, y: p.y + (Math.random() * 2 - 1) * jitterPx }));
+    const jTarget = targetImgPts.map((p) => ({ x: p.x + (Math.random() * 2 - 1) * jitterPx, y: p.y + (Math.random() * 2 - 1) * jitterPx }));
+    const H = computeHomography(jRef, refRealPts);
+    const p1 = applyHomography(H, jTarget[0]);
+    const p2 = applyHomography(H, jTarget[1]);
+    distances.push(Math.hypot(p2.x - p1.x, p2.y - p1.y));
+  }
+  const mean = distances.reduce((a, c) => a + c, 0) / distances.length;
+  const variance = distances.reduce((a, c) => a + (c - mean) ** 2, 0) / distances.length;
+  const stddev = Math.sqrt(variance);
+  const relError = mean > 0 ? stddev / mean : 1;
+  let confidenceLabel;
+  if (relError < 0.02) confidenceLabel = 'High confidence';
+  else if (relError < 0.06) confidenceLabel = 'Medium confidence';
+  else confidenceLabel = 'Low confidence — try a straighter-on angle or a bigger reference object';
+  return { toleranceInches: stddev, confidenceLabel };
+}
+
+function toleranceLabel(inches) {
+  return inches >= 12 ? `±${(inches / 12).toFixed(1)}ft` : `±${inches.toFixed(1)}"`;
+}
 
 let opCalibPts = [];
 let opTargetPts = [];
 let opStage = null; // 'calib' | 'target'
-let opPxPerUnit = null;
+let opHomography = null;
+let opRefRealPts = null;
+let opRefObjectLabel = '';
 let activeCanvas = null;
 let activeCtx = null;
 let liveMeasureActive = false;
@@ -1357,15 +1486,21 @@ function snapshotVideoFrame(videoEl) {
 }
 
 function updateRefObjectUI() {
-  opCustomLenRow.style.display = opRefObjectSelect.value === 'custom' ? 'block' : 'none';
+  opCustomRectRow.style.display = opRefObjectSelect.value === 'custom' ? 'flex' : 'none';
 }
 opRefObjectSelect.addEventListener('change', updateRefObjectUI);
 updateRefObjectUI();
 
+const CORNER_NAMES = ['top-left', 'top-right', 'bottom-right', 'bottom-left'];
+
+function calibHint(n) {
+  return `Tap corner ${n + 1} of 4 (${CORNER_NAMES[n]}) of your reference object.`;
+}
+
 function beginCalibration(canvas, ctx) {
   activeCanvas = canvas;
   activeCtx = ctx;
-  opCalibPts = []; opTargetPts = []; opPxPerUnit = null;
+  opCalibPts = []; opTargetPts = []; opHomography = null; opRefRealPts = null; opRefObjectLabel = '';
   opStage = 'calib';
   ctx.clearRect(0, 0, canvas.width, canvas.height);
   // Default to the interior door: it's the one reference object almost
@@ -1373,6 +1508,8 @@ function beginCalibration(canvas, ctx) {
   // need zero extra taps to pick something from the list.
   opRefObjectSelect.value = 'interiorDoor';
   updateRefObjectUI();
+  calibStatus.textContent = calibHint(0);
+  if (canvas === liveMeasureOverlay) liveMeasureBanner.textContent = calibHint(0);
 }
 
 // ---- Capture Photo to Measure (freeze-frame, saves a photo record) ----
@@ -1412,7 +1549,6 @@ liveMeasureBtn.addEventListener('click', () => {
   liveMeasureActive = true;
   liveMeasureOverlay.classList.add('active');
   liveMeasureBanner.style.display = 'block';
-  liveMeasureBanner.textContent = 'Tap the two ends of a known object on the video below, then pick what it is.';
   liveMeasureBtn.textContent = 'Cancel Live Measure';
   sizeLiveCanvas();
   beginCalibration(liveMeasureOverlay, liveCtx);
@@ -1429,6 +1565,7 @@ function stopLiveMeasure() {
     opStage = null;
     activeCanvas = null;
     activeCtx = null;
+    opHomography = null; opRefRealPts = null; opRefObjectLabel = '';
   }
 }
 
@@ -1447,22 +1584,30 @@ function onMeasureCanvasClick(e) {
   const x = e.clientX - rect.left, y = e.clientY - rect.top;
   if (opStage === 'calib') {
     opCalibPts.push({ x, y });
-    opDrawPoint(x, y, '#ffcc00');
-    if (opCalibPts.length === 2) {
-      opDrawLine(opCalibPts[0], opCalibPts[1], '#ffcc00');
+    opDrawPoint(x, y, '#ffcc00', opCalibPts.length);
+    if (opCalibPts.length > 1) {
+      opDrawLine(opCalibPts[opCalibPts.length - 2], opCalibPts[opCalibPts.length - 1], '#ffcc00');
+    }
+    if (opCalibPts.length === 4) {
+      opDrawLine(opCalibPts[3], opCalibPts[0], '#ffcc00'); // close the quad
       opCalibForm.style.display = 'block';
+    } else {
+      calibStatus.textContent = calibHint(opCalibPts.length);
+      if (canvas === liveMeasureOverlay) liveMeasureBanner.textContent = calibHint(opCalibPts.length);
     }
   } else if (opStage === 'target') {
     opTargetPts.push({ x, y });
     opDrawPoint(x, y, '#3ecf5f');
     if (opTargetPts.length === 2) {
       opDrawLine(opTargetPts[0], opTargetPts[1], '#3ecf5f');
-      const dx = opTargetPts[1].x - opTargetPts[0].x, dy = opTargetPts[1].y - opTargetPts[0].y;
-      const pxDist = Math.sqrt(dx * dx + dy * dy);
-      const inches = pxDist / opPxPerUnit;
+      const p1 = applyHomography(opHomography, opTargetPts[0]);
+      const p2 = applyHomography(opHomography, opTargetPts[1]);
+      const inches = Math.hypot(p2.x - p1.x, p2.y - p1.y);
       const meters = inches * 0.0254;
       const f = formatMeters(meters);
-      const result = { mode: 'manual', distanceMeters: f.meters, label: f.label };
+      const unc = estimateMeasurementUncertainty(opCalibPts, opRefRealPts, opTargetPts, 4);
+      const confidenceText = `${toleranceLabel(unc.toleranceInches)} — ${unc.confidenceLabel}`;
+      const result = { mode: 'manual', distanceMeters: f.meters, label: f.label, confidenceText, refObjectLabel: opRefObjectLabel };
       const entry = addMeasurement(result);
       if (canvas === photoOverlay && pendingMeasurePhoto) {
         // Still-photo flow: the photo was already saved when it was captured —
@@ -1481,9 +1626,10 @@ function onMeasureCanvasClick(e) {
       }
       if (ws) ws.send(JSON.stringify({ type: 'measurement-result', ...result }));
       opStage = null;
-      // Reset the tap points immediately so the next measurement (on this
-      // photo or the next one) starts from a clean slate.
-      opCalibPts = []; opTargetPts = [];
+      // Reset the tap points and homography immediately so the next
+      // measurement (on this photo or the next one) recalibrates from a
+      // clean slate instead of reusing a stale transform.
+      opCalibPts = []; opTargetPts = []; opHomography = null; opRefRealPts = null; opRefObjectLabel = '';
       if (canvas === photoOverlay) {
         if (ws) ws.send(JSON.stringify({ type: 'remote-photo-done' }));
         photoCancelRow.style.display = 'none';
@@ -1499,11 +1645,18 @@ function onMeasureCanvasClick(e) {
 photoOverlay.addEventListener('click', onMeasureCanvasClick);
 liveMeasureOverlay.addEventListener('click', onMeasureCanvasClick);
 
-function opDrawPoint(x, y, color) {
+function opDrawPoint(x, y, color, number) {
   activeCtx.fillStyle = color;
   activeCtx.beginPath();
   activeCtx.arc(x, y, 7, 0, Math.PI * 2);
   activeCtx.fill();
+  if (number) {
+    activeCtx.fillStyle = '#000';
+    activeCtx.font = 'bold 10px sans-serif';
+    activeCtx.textAlign = 'center';
+    activeCtx.textBaseline = 'middle';
+    activeCtx.fillText(String(number), x, y);
+  }
 }
 function opDrawLine(a, b, color) {
   activeCtx.strokeStyle = color;
@@ -1518,33 +1671,38 @@ $('opCalibCancelBtn').addEventListener('click', () => {
   opCalibPts = [];
   if (activeCtx && activeCanvas) activeCtx.clearRect(0, 0, activeCanvas.width, activeCanvas.height);
   opCalibForm.style.display = 'none';
+  calibStatus.textContent = calibHint(0);
   if (activeCanvas === liveMeasureOverlay) {
-    liveMeasureBanner.textContent = 'Tap the two ends of a known object on the video below, then pick what it is.';
+    liveMeasureBanner.textContent = calibHint(0);
   }
 });
 
 $('opCalibConfirmBtn').addEventListener('click', () => {
-  let inches;
+  let w, h, refLabel;
   if (opRefObjectSelect.value === 'custom') {
-    const val = parseFloat(opCalibInput.value);
-    if (!val || val <= 0) { opCalibInput.focus(); return; }
-    inches = opCalibUnit.value === 'ft' ? val * 12 : val;
+    const wVal = parseFloat(opCalibWidthInput.value);
+    const hVal = parseFloat(opCalibHeightInput.value);
+    if (!wVal || wVal <= 0 || !hVal || hVal <= 0) { opCalibWidthInput.focus(); return; }
+    const unitMult = opCalibUnit.value === 'ft' ? 12 : 1;
+    w = wVal * unitMult; h = hVal * unitMult;
+    refLabel = `custom ${w}×${h}in reference`;
   } else {
-    inches = REF_LIBRARY[opRefObjectSelect.value];
+    const ref = REF_LIBRARY[opRefObjectSelect.value];
+    w = ref.w; h = ref.h;
+    refLabel = ref.label;
   }
-  const dx = opCalibPts[1].x - opCalibPts[0].x, dy = opCalibPts[1].y - opCalibPts[0].y;
-  const pxDist = Math.sqrt(dx * dx + dy * dy);
-  opPxPerUnit = pxDist / inches;
+  // Map the 4 tapped image corners (in tap order: TL, TR, BR, BL) onto the
+  // object's true rectangle in inches — this is the actual projective
+  // transform, not a single scale ratio.
+  opRefRealPts = [{ x: 0, y: 0 }, { x: w, y: 0 }, { x: w, y: h }, { x: 0, y: h }];
+  opHomography = computeHomography(opCalibPts, opRefRealPts);
+  opRefObjectLabel = refLabel;
   opCalibForm.style.display = 'none';
-  opCalibInput.value = '';
+  opCalibWidthInput.value = ''; opCalibHeightInput.value = '';
   opStage = 'target';
-  if (activeCanvas === liveMeasureOverlay) {
-    liveMeasureBanner.textContent = 'Now tap the two points you want to measure between.';
-  }
-  const refLabel = opRefObjectSelect.value === 'custom'
-    ? `custom ${inches}in reference`
-    : opRefObjectSelect.options[opRefObjectSelect.selectedIndex].textContent;
-  calibStatus.textContent = `Scale locked from: ${refLabel} — ${opPxPerUnit.toFixed(1)} px/inch — set at ${new Date().toLocaleTimeString()}. This scale is only used for the measurement you're about to tap; the next one recalibrates from scratch.`;
+  const msg = 'Now tap the two points you want to measure between.';
+  if (activeCanvas === liveMeasureOverlay) liveMeasureBanner.textContent = msg;
+  calibStatus.textContent = `Plane locked from: ${refLabel} — set at ${new Date().toLocaleTimeString()}. ${msg} This calibration is only used for the measurement you're about to tap; the next one recalibrates from scratch.`;
 });
 
 $('cancelPhotoBtn').addEventListener('click', () => {
@@ -1555,6 +1713,7 @@ $('cancelPhotoBtn').addEventListener('click', () => {
   if (ws) ws.send(JSON.stringify({ type: 'remote-photo-done' }));
   pendingMeasurePhoto = null;
   activeCanvas = null; activeCtx = null;
+  opHomography = null; opRefRealPts = null; opRefObjectLabel = '';
 });
 
 // ---------- Tab switching ----------
