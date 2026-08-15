@@ -197,6 +197,30 @@
   #moodBox.mood-sad { border-color:#e0722a; background:rgba(224,114,42,.12); }
   #moodBox.mood-meh { border-color:#e0c22a; background:rgba(224,194,42,.12); }
   #moodBox.mood-happy { border-color:#3ecf5f; background:rgba(62,207,95,.12); }
+
+  /* ---- Holographic EST clock, fixed bottom-left ---- */
+  #holoClock {
+    position:fixed; bottom:18px; left:18px; z-index:200;
+    background:rgba(6,20,26,.55); border:1px solid rgba(90,230,255,.45); border-radius:10px;
+    padding:9px 16px; font-family:'Courier New', Consolas, monospace; color:#7ff3ff;
+    text-shadow:0 0 6px rgba(90,230,255,.85), 0 0 14px rgba(90,230,255,.5);
+    box-shadow:0 0 18px rgba(60,200,255,.25), inset 0 0 12px rgba(60,200,255,.08);
+    backdrop-filter:blur(3px); pointer-events:none; overflow:hidden;
+    animation:holoFlicker 3.2s infinite;
+  }
+  #holoClock::before {
+    content:""; position:absolute; inset:0;
+    background:repeating-linear-gradient(0deg, rgba(120,240,255,.06) 0px, rgba(120,240,255,.06) 1px, transparent 1px, transparent 3px);
+    mix-blend-mode:screen; animation:holoScan 6s linear infinite;
+  }
+  #holoClock .holo-time { position:relative; font-size:23px; font-weight:700; letter-spacing:.05em; line-height:1.1; }
+  #holoClock .holo-date { position:relative; font-size:9.5px; letter-spacing:.2em; text-transform:uppercase; color:#4fd8ee; opacity:.85; margin-top:2px; }
+  @keyframes holoFlicker {
+    0%, 100% { opacity:1; } 92% { opacity:1; } 93% { opacity:.82; } 94% { opacity:1; } 96% { opacity:.9; } 97% { opacity:1; }
+  }
+  @keyframes holoScan {
+    0% { background-position-y:0; } 100% { background-position-y:40px; }
+  }
 </style>
 </head>
 <body>
@@ -350,6 +374,11 @@
     </div>
   </div>
 </main>
+
+<div id="holoClock">
+  <div class="holo-time" id="holoTime">--:--:--</div>
+  <div class="holo-date">EST</div>
+</div>
 
 <!-- Free, self-hosted (no API key, no per-call cost) object classifier used to
      suggest a room type from each captured photo. Runs entirely in this
@@ -599,7 +628,14 @@ async function ensurePC() {
 
 async function turnCameraOn() {
   try {
-    localStream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
+    // Explicit echo cancellation / noise suppression / auto-gain — leaving
+    // this as bare `audio: true` let some devices skip full echo
+    // processing, which is what caused the swelling feedback squeal when
+    // both sides' mic+speaker were open near each other.
+    localStream = await navigator.mediaDevices.getUserMedia({
+      video: true,
+      audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
+    });
     selfVideo.srcObject = localStream;
     cameraOn = true;
     $('muteBtn').disabled = false;
@@ -1735,6 +1771,19 @@ document.querySelectorAll('.tab-btn').forEach((btn) => {
 });
 
 newSession();
+
+// ---------- Holographic EST clock (bottom-left, ticks every second) ----------
+const holoTimeEl = $('holoTime');
+function updateHoloClock() {
+  const parts = new Intl.DateTimeFormat('en-US', {
+    timeZone: 'America/New_York',
+    hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false,
+  }).formatToParts(new Date());
+  const get = (type) => parts.find((p) => p.type === type)?.value || '00';
+  holoTimeEl.textContent = `${get('hour')}:${get('minute')}:${get('second')}`;
+}
+updateHoloClock();
+setInterval(updateHoloClock, 1000);
 </script>
 </body>
 </html>
