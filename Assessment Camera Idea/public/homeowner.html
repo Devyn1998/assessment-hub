@@ -216,7 +216,7 @@ function setStatus(text, live) {
   dot.classList.toggle('live', !!live);
   if (live && !callStarted) {
     callStarted = true;
-    scheduleBanner(2 * 60 * 1000); // first appearance at 2 minutes in
+    scheduleBanner(0); // first appearance right at the start of the call
     startHomeownerSpeechRecognition();
   }
 }
@@ -289,7 +289,7 @@ function showBannerOnce() {
   promoBanner.style.display = 'block';
   setTimeout(() => {
     promoBanner.style.display = 'none';
-  }, 20 * 1000);
+  }, 10 * 1000);
 }
 
 ws.addEventListener('open', () => {
@@ -390,8 +390,12 @@ async function ensurePC() {
 }
 
 async function startCamera(facing) {
+  // Explicit echo cancellation / noise suppression / auto-gain — bare
+  // `audio: true` let some devices skip full echo processing, which is
+  // what caused the swelling feedback squeal when both sides' mic+speaker
+  // were open near each other.
   const constraints = {
-    audio: true,
+    audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
     video: { facingMode: { ideal: facing }, width: { ideal: 1280 }, height: { ideal: 720 } }
   };
   const stream = await navigator.mediaDevices.getUserMedia(constraints);
