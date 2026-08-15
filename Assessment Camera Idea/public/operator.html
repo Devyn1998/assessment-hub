@@ -221,6 +221,20 @@
   @keyframes holoScan {
     0% { background-position-y:0; } 100% { background-position-y:40px; }
   }
+
+  /* ---- Walkthrough map (auto-tracked path) ---- */
+  #walkMapSvg polyline.walk-path { fill:none; stroke:#2f7dfa; stroke-width:3; }
+  #walkMapSvg polyline.walk-path-live { fill:none; stroke:#2f7dfa; stroke-width:2; stroke-dasharray:5 4; opacity:.6; }
+  #walkMapSvg circle.walk-node { fill:#14161b; stroke:#8ab4ff; stroke-width:2; }
+  #walkMapSvg circle.walk-node.walk-start { fill:#3ecf5f; stroke:#3ecf5f; }
+  #walkMapSvg text.walk-node-label { fill:#ccc; font-size:10px; font-family:-apple-system,system-ui,sans-serif; }
+  .walk-legend-row { display:flex; gap:8px; align-items:center; background:#0d0e11; border:1px solid #262a31; border-radius:8px; padding:6px 8px; margin-bottom:6px; }
+  .walk-legend-row img { width:34px; height:34px; object-fit:cover; border-radius:4px; flex:0 0 auto; cursor:zoom-in; }
+  .walk-legend-thumb-empty { width:34px; height:34px; border-radius:4px; flex:0 0 auto; background:#1a1c22; }
+  .walk-legend-body { flex:1; min-width:0; }
+  .walk-legend-meta { font-size:10px; color:#888; }
+  .walk-legend-name { width:100%; padding:5px 7px; border-radius:6px; border:1px solid #2b2e36; background:#15171b; color:#eee; font-size:12px; font-family:inherit; margin-top:2px; }
+  .walk-guess-tag { font-size:9.5px; color:#3ecf5f; }
 </style>
 </head>
 <body>
@@ -309,6 +323,14 @@
         <button id="endArBtn" class="secondary">End AR</button>
       </div>
 
+      <div class="indicator" id="walkIndicatorRow" style="display:none;">
+        <span class="idot on"></span><span id="walkIndicatorText">Walkthrough active — tracking turns &amp; rooms automatically</span>
+      </div>
+      <div id="walkRemoteRow" style="display:none;">
+        <button id="markTurnBtn" class="secondary">Mark Turn (missed by sensor)</button>
+        <button id="endWalkBtn" class="secondary">End Walkthrough</button>
+      </div>
+
       <div style="display:flex; gap:8px;">
         <button id="takePhotoBtn" class="secondary" style="flex:1;">Take Photo</button>
         <button id="liveMeasureBtn" class="secondary" style="flex:1;">Measure on Live Video</button>
@@ -356,7 +378,17 @@
     </div>
 
     <div class="tab-panel" id="tab-floorplan" style="display:none;">
-      <p class="hint">Rooms are drawn to scale from your "Width" and "Wall Length" tagged measurements. Each room card also lists every measurement taken there (with its confidence), and every photo with its description — everything from that room in one place. This is a scaled room-by-room layout for reference and record-keeping — not yet a connected walkthrough map (we don't capture which walls border which rooms).</p>
+      <div class="section-title" style="margin-top:0;">Walkthrough Map</div>
+      <p class="hint" id="walkMapHint">Have the homeowner tap "Start Walkthrough" at the front door on their screen — turns and rooms are then logged automatically as they walk, using their phone's compass and step count. Positions are an estimate (this kind of tracking drifts over a full house), so treat this as a rough sketch of the route and turn order, not a precise blueprint. Room names are AI guesses from each waypoint's photo — correct any of them below.</p>
+      <div id="walkMapWrap" style="background:#0d0e11;border:1px solid #262a31;border-radius:10px;padding:10px;margin-bottom:10px;display:none;">
+        <svg id="walkMapSvg" width="100%" height="240" style="display:block;"></svg>
+        <button class="secondary" id="downloadWalkMapBtn" style="width:100%;margin-top:8px;">Download Map Image</button>
+      </div>
+      <div id="walkLegend"></div>
+      <div id="walkMapEmpty" class="hint" style="margin:0 0 18px;">No walkthrough recorded yet.</div>
+
+      <div class="section-title">Room Cards</div>
+      <p class="hint">Rooms are drawn to scale from your "Width" and "Wall Length" tagged measurements. Each room card also lists every measurement taken there (with its confidence), and every photo with its description — everything from that room in one place.</p>
       <div id="scaleReadout" class="hint" style="margin-top:0;"></div>
       <div id="floorPlanGrid"></div>
       <div id="floorPlanEmpty" class="hint" style="margin:0;">No rooms yet. Tag a measurement "Width" or "Wall Length" (or just take a photo) in a room to add it here.</div>
@@ -440,6 +472,15 @@ const calibStatus = $('calibStatus');
 const floorPlanGrid = $('floorPlanGrid');
 const floorPlanEmpty = $('floorPlanEmpty');
 const scaleReadout = $('scaleReadout');
+const walkIndicatorRow = $('walkIndicatorRow');
+const walkRemoteRow = $('walkRemoteRow');
+const markTurnBtn = $('markTurnBtn');
+const endWalkBtn = $('endWalkBtn');
+const walkMapWrap = $('walkMapWrap');
+const walkMapSvg = $('walkMapSvg');
+const walkLegend = $('walkLegend');
+const walkMapEmpty = $('walkMapEmpty');
+const downloadWalkMapBtn = $('downloadWalkMapBtn');
 const assessorSelect = $('assessorSelect');
 let currentAssessor = '';
 
@@ -557,9 +598,24 @@ function connectWS() {
       arStep = 0;
     } else if (msg.type === 'ar-hit-state') {
       setArIndicator(msg.hit, msg.hit ? 'Surface detected — ready to drop pin' : 'No surface — aim at a flat wall');
+    } else if (msg.type === 'walk-started') {
+      walkIndicatorRow.style.display = '';
+      walkRemoteRow.style.display = 'flex';
+      startWalkMap();
+    } else if (msg.type === 'walk-turn') {
+      registerWalkTurn(msg.direction, msg.angle);
+    } else if (msg.type === 'walk-leg-update') {
+      updateWalkLegDistance(msg.legFt);
+    } else if (msg.type === 'walk-ended') {
+      walkIndicatorRow.style.display = 'none';
+      walkRemoteRow.style.display = 'none';
+      endWalkMap();
     } else if (msg.type === 'photo-frame') {
       if (msg.mode === 'document') {
         addGalleryPhoto(msg.image, 'document');
+        ws.send(JSON.stringify({ type: 'remote-photo-done' }));
+      } else if (msg.mode === 'walk') {
+        handleWalkPhoto(msg.image);
         ws.send(JSON.stringify({ type: 'remote-photo-done' }));
       } else {
         pendingMeasurePhoto = addGalleryPhoto(msg.image, 'measure');
@@ -700,6 +756,17 @@ $('copyBtn').addEventListener('click', () => {
 $('newBtn').addEventListener('click', () => {
   log.innerHTML = '';
   log.appendChild(empty);
+  walkActive = false;
+  walkPoints = [];
+  walkNodes = [];
+  walkPendingNode = null;
+  walkCurrentLegFt = 0;
+  walkHeadingDeg = 0;
+  walkMapWrap.style.display = 'none';
+  walkMapEmpty.style.display = '';
+  walkLegend.innerHTML = '';
+  walkIndicatorRow.style.display = 'none';
+  walkRemoteRow.style.display = 'none';
   newSession();
 });
 
@@ -932,6 +999,197 @@ function renderFloorPlan() {
     floorPlanGrid.appendChild(card);
   });
 }
+
+// ---------- Automatic walkthrough map (compass + step tracking) ----------
+// Built from dead-reckoning on the homeowner's phone (compass heading +
+// step count) — there's no real indoor positioning available from browser
+// sensors, so this is a rough sketch of the route and turn order, not a
+// precise blueprint. Room names are the same free MobileNet guess used
+// elsewhere, applied to each waypoint's auto-captured photo; renaming one
+// here never affects the auto-tracking itself.
+const WALK_PX_PER_FT = 9;
+let walkActive = false;
+let walkHeadingDeg = 0;
+let walkPoints = [];
+let walkNodes = [];
+let walkPendingNode = null;
+let walkCurrentLegFt = 0;
+let walkNodeCounter = 0;
+
+function walkDegToRad(d) { return (d * Math.PI) / 180; }
+
+function startWalkMap() {
+  walkActive = true;
+  walkHeadingDeg = 0;
+  walkCurrentLegFt = 0;
+  walkPoints = [{ x: 0, y: 0 }];
+  walkNodeCounter = 1;
+  const startNode = { id: walkNodeCounter, room: 'Front Door', roomIsGuess: false, photo: null, legToNextFt: null, turnDirection: null };
+  walkNodes = [startNode];
+  walkPendingNode = startNode;
+  walkMapWrap.style.display = '';
+  walkMapEmpty.style.display = 'none';
+  renderWalkMap();
+}
+
+function walkCurrentTip() {
+  const base = walkPoints[walkPoints.length - 1];
+  const rad = walkDegToRad(walkHeadingDeg);
+  return {
+    x: base.x + Math.sin(rad) * walkCurrentLegFt * WALK_PX_PER_FT,
+    y: base.y - Math.cos(rad) * walkCurrentLegFt * WALK_PX_PER_FT,
+  };
+}
+
+function updateWalkLegDistance(legFt) {
+  if (!walkActive) return;
+  walkCurrentLegFt = legFt;
+  renderWalkMap();
+}
+
+function registerWalkTurn(direction, angle) {
+  if (!walkActive) return;
+  const tip = walkCurrentTip();
+  const prevBase = walkPoints[walkPoints.length - 1];
+  if (walkNodes.length) {
+    walkNodes[walkNodes.length - 1].legToNextFt = Math.round((Math.hypot(tip.x - prevBase.x, tip.y - prevBase.y) / WALK_PX_PER_FT) * 10) / 10;
+  }
+  walkPoints.push(tip);
+  walkHeadingDeg += direction === 'right' ? Math.abs(angle) : -Math.abs(angle);
+  walkCurrentLegFt = 0;
+  walkNodeCounter++;
+  const node = { id: walkNodeCounter, room: '', roomIsGuess: false, photo: null, legToNextFt: null, turnDirection: direction };
+  walkNodes.push(node);
+  walkPendingNode = node;
+  renderWalkMap();
+}
+
+function handleWalkPhoto(dataUrl) {
+  const node = walkPendingNode;
+  if (!node) return;
+  node.photo = dataUrl;
+  renderWalkMap();
+  getMobilenetModel().then((model) => {
+    const img = new Image();
+    img.onload = () => {
+      model.classify(img).then((predictions) => {
+        const guess = guessRoomFromPredictions(predictions);
+        if (guess && !node.room) { node.room = guess; node.roomIsGuess = true; }
+        renderWalkMap();
+      }).catch(() => {});
+    };
+    img.src = dataUrl;
+  }).catch(() => {});
+}
+
+function endWalkMap() {
+  if (!walkActive) return;
+  if (walkNodes.length) walkNodes[walkNodes.length - 1].legToNextFt = walkCurrentLegFt;
+  walkActive = false;
+  renderWalkMap();
+}
+
+function renderWalkMap() {
+  if (!walkPoints.length) return;
+  const tip = walkActive ? walkCurrentTip() : null;
+  const allPts = tip ? [...walkPoints, tip] : walkPoints;
+  const xs = allPts.map((p) => p.x), ys = allPts.map((p) => p.y);
+  const pad = 30;
+  const minX = Math.min(...xs, 0) - pad, maxX = Math.max(...xs, 0) + pad;
+  const minY = Math.min(...ys, 0) - pad, maxY = Math.max(...ys, 0) + pad;
+  const w = Math.max(maxX - minX, 120), h = Math.max(maxY - minY, 120);
+  walkMapSvg.setAttribute('viewBox', `${minX} ${minY} ${w} ${h}`);
+
+  const frozenPts = walkPoints.map((p) => `${p.x},${p.y}`).join(' ');
+  let svg = `<polyline class="walk-path" points="${escapeHtml(frozenPts)}" />`;
+  if (tip) {
+    const last = walkPoints[walkPoints.length - 1];
+    svg += `<polyline class="walk-path-live" points="${escapeHtml(last.x + ',' + last.y + ' ' + tip.x + ',' + tip.y)}" />`;
+  }
+  walkNodes.forEach((node, i) => {
+    const p = walkPoints[i];
+    if (!p) return;
+    const isStart = i === 0;
+    svg += `<circle class="walk-node${isStart ? ' walk-start' : ''}" cx="${p.x}" cy="${p.y}" r="7" />`;
+    svg += `<text class="walk-node-label" x="${p.x + 10}" y="${p.y + 4}">${escapeHtml(String(i + 1))}</text>`;
+  });
+  if (tip) {
+    svg += `<circle class="walk-node" cx="${tip.x}" cy="${tip.y}" r="5" style="opacity:.6;" />`;
+  }
+  walkMapSvg.innerHTML = svg;
+  renderWalkLegend();
+}
+
+function renderWalkLegend() {
+  walkLegend.innerHTML = '';
+  walkNodes.forEach((node, i) => {
+    const row = document.createElement('div');
+    row.className = 'walk-legend-row';
+    if (node.photo) {
+      const img = document.createElement('img');
+      img.src = node.photo;
+      img.addEventListener('click', () => window.open(node.photo, '_blank'));
+      row.appendChild(img);
+    } else {
+      const ph = document.createElement('div');
+      ph.className = 'walk-legend-thumb-empty';
+      row.appendChild(ph);
+    }
+    const body = document.createElement('div');
+    body.className = 'walk-legend-body';
+    const metaBits = [];
+    if (i === 0) metaBits.push('Start');
+    else metaBits.push(`Turned ${node.turnDirection || ''}`.trim());
+    if (typeof node.legToNextFt === 'number') metaBits.push(`~${node.legToNextFt}ft to next`);
+    const meta = document.createElement('div');
+    meta.className = 'walk-legend-meta';
+    meta.textContent = `${i + 1}. ${metaBits.join(' · ')}`;
+    const input = document.createElement('input');
+    input.className = 'walk-legend-name';
+    input.placeholder = 'Room name';
+    input.value = node.room || '';
+    input.addEventListener('input', () => { node.room = input.value; node.roomIsGuess = false; });
+    body.appendChild(meta);
+    body.appendChild(input);
+    if (node.roomIsGuess && node.room) {
+      const tag = document.createElement('div');
+      tag.className = 'walk-guess-tag';
+      tag.textContent = 'AI guess — edit if wrong';
+      body.appendChild(tag);
+    }
+    row.appendChild(body);
+    walkLegend.appendChild(row);
+  });
+}
+
+downloadWalkMapBtn.addEventListener('click', () => {
+  const svgData = new XMLSerializer().serializeToString(walkMapSvg);
+  const svgBlob = new Blob([svgData], { type: 'image/svg+xml;charset=utf-8' });
+  const url = URL.createObjectURL(svgBlob);
+  const img = new Image();
+  img.onload = () => {
+    const scale = 2;
+    const vb = walkMapSvg.viewBox.baseVal;
+    const c = document.createElement('canvas');
+    c.width = (vb.width || img.width) * scale;
+    c.height = (vb.height || img.height) * scale;
+    const cx = c.getContext('2d');
+    cx.fillStyle = '#0d0e11';
+    cx.fillRect(0, 0, c.width, c.height);
+    cx.drawImage(img, 0, 0, c.width, c.height);
+    URL.revokeObjectURL(url);
+    const a = document.createElement('a');
+    a.href = c.toDataURL('image/png');
+    a.download = 'walkthrough-map.png';
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+  };
+  img.src = url;
+});
+
+markTurnBtn.addEventListener('click', () => { if (ws) ws.send(JSON.stringify({ type: 'remote-mark-turn' })); });
+endWalkBtn.addEventListener('click', () => { if (ws) ws.send(JSON.stringify({ type: 'remote-end-walk' })); });
 
 // ---------- Free client-side room auto-label (TensorFlow.js MobileNet) ----------
 // MobileNet is an object classifier (ImageNet's 1000 classes), not a room/
@@ -1308,6 +1566,10 @@ function buildAndDownloadReport() {
     `).join('')
     : '<p style="color:#999;">No measurements recorded.</p>';
 
+  const walkRouteHtml = walkNodes.length
+    ? `<ol>${walkNodes.map((n, i) => `<li>${escapeHtml(n.room || ('Waypoint ' + (i + 1)))}${i > 0 ? ` — turned ${escapeHtml(n.turnDirection || '')}` : ''}${typeof n.legToNextFt === 'number' ? `, ~${n.legToNextFt}ft to next` : ''}</li>`).join('')}</ol>`
+    : '<p style="color:#999;">No walkthrough recorded.</p>';
+
   const measurementsHtml = measurementLog.length
     ? measurementLog.map((m) => `<li>${m.userLabel ? `<strong>${escapeHtml(m.userLabel)}:</strong> ` : ''}${m.mode === 'ar' ? 'AR Measurement' : 'Photo Estimate'} — <strong>${escapeHtml(m.label || '')}</strong> (${m.distanceMeters} m)${m.confidenceText ? ` <span style="color:#1e7a3a;">[${escapeHtml(m.confidenceText)}]</span>` : ''} — ${escapeHtml(m.room || 'Unassigned')} — ${new Date(m.time).toLocaleTimeString()}${!m.userLabel ? ' <span style="color:#c0392b;">(unlabeled)</span>' : ''}</li>`).join('')
     : '<li style="color:#999;">No measurements recorded.</li>';
@@ -1338,6 +1600,8 @@ function buildAndDownloadReport() {
   <ul>${checklistHtml}</ul>
   <h2>Measurements by Room</h2>
   ${roomsHtml}
+  <h2>Walkthrough Route</h2>
+  ${walkRouteHtml}
   <h2>All Measurements (chronological)</h2>
   <ul>${measurementsHtml}</ul>
   <h2>Photos (${sortedPhotos.length})</h2>
