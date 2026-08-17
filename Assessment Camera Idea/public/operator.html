@@ -2175,6 +2175,35 @@ function buildWalkPlan() {
   });
 }
 
+// With no rooms yet the box still draws, with the front door already marked,
+// so it reads as "the plan starts here" rather than an empty panel. This is
+// also the state after New Session and after deleting every room — losing it
+// threw inside renderWalkMap and silently killed whatever called it.
+function renderIdleWalkPlan() {
+  walkMapSvg.classList.remove('pickable');
+  walkMapSvg.setAttribute('viewBox', '-30 -22 60 40');
+  walkMapSvg.setAttribute('preserveAspectRatio', 'xMidYMid meet');
+  walkMapSvg.innerHTML = `<defs>
+      <pattern id="wpGridMinor" width="1" height="1" patternUnits="userSpaceOnUse">
+        <path d="M1 0 L0 0 0 1" fill="none" stroke="#1b2230" stroke-width="0.04" />
+      </pattern>
+      <pattern id="wpGrid" width="5" height="5" patternUnits="userSpaceOnUse">
+        <rect width="5" height="5" fill="url(#wpGridMinor)" />
+        <path d="M5 0 L0 0 0 5" fill="none" stroke="#2a3444" stroke-width="0.08" />
+      </pattern>
+      <marker id="wpArrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="3.2" markerHeight="3.2" orient="auto-start-reverse">
+        <path d="M0 0 L10 5 L0 10 z" fill="#d1493f" />
+      </marker>
+    </defs>
+    <rect class="wp-bg" x="-30" y="-22" width="60" height="40" />
+    <rect x="-30" y="-22" width="60" height="40" fill="url(#wpGrid)" />
+    <line class="wp-threshold" x1="-2.2" y1="0" x2="2.2" y2="0" stroke-width="0.5" />
+    <line class="wp-entry-arrow" x1="0" y1="5.5" x2="0" y2="-0.4" marker-end="url(#wpArrow)" />
+    <text class="wp-door-label" x="0" y="9.2" font-size="1.9">FRONT DOOR</text>
+    <text class="wp-dim-text" x="0" y="-5" font-size="1.9">Press Start Walkthrough — the plan draws from here</text>`;
+  renderWalkLegend();
+}
+
 function renderWalkMap() {
   const rooms = buildWalkPlan();
   if (!rooms.length) { renderIdleWalkPlan(); return; }
