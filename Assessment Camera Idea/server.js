@@ -47,6 +47,47 @@ app.get('/join/:roomId', (req, res) => {
 
 app.get('/health', (req, res) => res.json({ ok: true }));
 
+// ---------- TURN credentials ----------
+// The previous setup shipped a permanent TURN username/password inside
+// rtc-config.js, which every visitor's browser could read straight off the
+// page. That is almost certainly how a 500MB monthly quota vanished. The
+// long-lived secret now stays here on the server, and each client asks for a
+// short-lived credential that expires on its own.
+const TURN_KEY_ID = process.env.CF_TURN_KEY_ID || '';
+const TURN_API_TOKEN = process.env.CF_TURN_API_TOKEN || '';
+const TURN_TTL_SECONDS = 2 * 60 * 60; // a session credential, not a standing one
+
+app.get('/api/ice', async (req, res) => {
+  if (!TURN_KEY_ID || !TURN_API_TOKEN) {
+    // No relay configured: STUN alone still connects same-network calls, so
+    // degrade instead of failing the whole session.
+    return res.json({
+      iceServers: [{ urls: ['stun:stun.cloudflare.com:3478', 'stun:stun.l.google.com:19302'] }],
+      relay: false,
+    });
+  }
+  try {
+    const r = await fetch(
+      `https://rtc.live.cloudflare.com/v1/turn/keys/${TURN_KEY_ID}/credentials/generate-ice-servers`,
+      {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${TURN_API_TOKEN}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ttl: TURN_TTL_SECONDS }),
+      }
+    );
+    if (!r.ok) throw new Error('Cloudflare TURN responded ' + r.status);
+    const data = await r.json();
+    res.set('Cache-Control', 'no-store');
+    res.json({ iceServers: data.iceServers, relay: true });
+  } catch (e) {
+    console.warn('TURN credential mint failed, falling back to STUN:', e.message);
+    res.json({
+      iceServers: [{ urls: ['stun:stun.cloudflare.com:3478', 'stun:stun.l.google.com:19302'] }],
+      relay: false,
+    });
+  }
+});
+
 function send(ws, msg) {
   if (ws && ws.readyState === ws.OPEN) {
     ws.send(JSON.stringify(msg));
