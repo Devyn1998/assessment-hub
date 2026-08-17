@@ -484,6 +484,13 @@
   /* ---------- Walkthrough floor plan ----------
      Drawn in real-world units: one SVG user unit == one foot, so wall
      thicknesses and lettering are specified the way a drafter would. */
+  #floorRow { display:flex; align-items:center; gap:9px; margin-bottom:10px; }
+  #floorRow label {
+    font-size:9.5px; text-transform:uppercase; letter-spacing:.1em;
+    font-weight:700; color:var(--text-3); flex:0 0 auto;
+  }
+  #floorSelect { flex:1; min-width:0; }
+  #floorRow button { flex:0 0 auto; padding:8px 12px; font-size:11.5px; }
   #walkStartRow { display:flex; align-items:center; gap:11px; margin-bottom:11px; }
   #walkStartRow button { flex:0 0 auto; }
   #walkStartRow button.live { background:var(--danger); }
@@ -702,6 +709,11 @@
 
     <div class="tab-panel" id="tab-floorplan" style="display:none;">
       <div class="section-title" style="margin-top:0;">Walkthrough Map</div>
+      <div id="floorRow">
+        <label>Floor</label>
+        <select id="floorSelect"></select>
+        <button class="secondary" id="newFloorBtn">+ New Floor</button>
+      </div>
       <div id="walkStartRow">
         <button id="startWalkBtn" disabled>Start Walkthrough</button>
         <button class="secondary" id="newRoomBtn" disabled>+ New Room</button>
@@ -817,6 +829,8 @@ const walkMapSvg = $('walkMapSvg');
 const walkLegend = $('walkLegend');
 const startWalkBtn = $('startWalkBtn');
 const newRoomBtn = $('newRoomBtn');
+const floorSelect = $('floorSelect');
+const newFloorBtn = $('newFloorBtn');
 const walkStartStatus = $('walkStartStatus');
 const downloadWalkMapBtn = $('downloadWalkMapBtn');
 const assessorSelect = $('assessorSelect');
@@ -929,14 +943,35 @@ async function newSession() {
   connectWS();
 }
 
-function connectWS() {
-  if (ws) ws.close();
-  if (pc) { pc.close(); pc = null; }
-  remoteVideo.srcObject = null;
+// Nothing here used to recover on its own: a dropped socket or a failed ICE
+// path just froze the session until someone reloaded. Both now retry by
+// themselves with backoff, so a lock screen, a wifi-to-cellular handover or a
+// TURN blip heals instead of ending the assessment.
+let wsRetry = 0;
+let wsIntentionalClose = false;
+
+function connectWS(isRetry) {
+  if (!isRetry) {
+    wsIntentionalClose = true;
+    if (ws) { try { ws.close(); } catch (e) {} }
+    if (pc) { try { pc.close(); } catch (e) {} pc = null; }
+    remoteVideo.srcObject = null;
+    wsRetry = 0;
+  }
+  wsIntentionalClose = false;
   const wsProto = location.protocol === 'https:' ? 'wss' : 'ws';
   ws = new WebSocket(`${wsProto}://${location.host}`);
 
+  ws.addEventListener('close', () => {
+    if (wsIntentionalClose) return;
+    const delay = Math.min(1000 * Math.pow(2, wsRetry++), 10000);
+    setStatus(`Signal lost — reconnecting in ${Math.round(delay / 1000)}s…`, false);
+    setTimeout(() => connectWS(true), delay);
+  });
+  ws.addEventListener('error', () => { try { ws.close(); } catch (e) {} });
+
   ws.addEventListener('open', () => {
+    wsRetry = 0;
     ws.send(JSON.stringify({ type: 'join', roomId, role: 'operator' }));
     setStatus('Waiting for homeowner to open the link…', false);
   });
@@ -1040,6 +1075,33 @@ function connectWS() {
   });
 }
 
+// Escalating repair: ask for a fresh ICE path first (cheap, keeps the call
+// up), and only tear the whole peer connection down and rebuild if repeated
+// restarts don't take.
+let iceRetry = 0;
+let iceTimer = null;
+function scheduleIceRecovery() {
+  if (iceTimer) return;
+  const delay = Math.min(1500 * Math.pow(2, iceRetry), 8000);
+  iceTimer = setTimeout(async () => {
+    iceTimer = null;
+    if (!pc) return;
+    if (pc.connectionState === 'connected') { iceRetry = 0; return; }
+    iceRetry++;
+    if (iceRetry <= 4 && typeof pc.restartIce === 'function') {
+      try { pc.restartIce(); } catch (e) { console.warn('ICE restart failed', e); }
+      scheduleIceRecovery();
+    } else {
+      setStatus('Rebuilding connection…', false);
+      try { pc.close(); } catch (e) {}
+      pc = null;
+      iceRetry = 0;
+      remoteVideo.srcObject = null;
+      await ensurePC();
+    }
+  }, delay);
+}
+
 async function ensurePC() {
   if (pc) return;
   pc = new RTCPeerConnection({ iceServers: window.HUD_ICE_SERVERS });
@@ -1061,8 +1123,12 @@ async function ensurePC() {
     setStatus('Live', true);
   };
   pc.onconnectionstatechange = () => {
-    if (pc.connectionState === 'connected') setStatus('Live', true);
-    if (['disconnected','failed','closed'].includes(pc.connectionState)) setStatus('Connection lost', false);
+    if (pc.connectionState === 'connected') { setStatus('Live', true); iceRetry = 0; }
+    if (['disconnected', 'failed'].includes(pc.connectionState)) {
+      setStatus('Video dropped — reconnecting…', false);
+      scheduleIceRecovery();
+    }
+    if (pc.connectionState === 'closed') setStatus('Connection closed', false);
   };
   // Fires for the initial offer above, and again any time tracks change
   // later (e.g. turning your camera on/off mid-call) — without this,
@@ -1161,7 +1227,10 @@ $('newBtn').addEventListener('click', () => {
   walkPendingNode = null;
   walkCurrentLegFt = 0;
   walkHeadingDeg = 0;
-  walkSegments = [];
+  walkFloors = [{ name: '1st Floor', segments: [] }];
+  walkFloorIdx = 0;
+  walkSegments = walkFloors[0].segments;
+  renderFloorSelect();
   walkSegFtBase = 0;
   walkLastTurn = null;
   walkSelectedIdx = null;
@@ -1578,6 +1647,8 @@ function setWalkControlState(state, note) {
 }
 
 newRoomBtn.addEventListener('click', onNewRoomPressed);
+floorSelect.addEventListener('change', () => setActiveFloor(parseInt(floorSelect.value, 10)));
+newFloorBtn.addEventListener('click', addFloor);
 
 startWalkBtn.addEventListener('click', () => {
   if (!ws) return;
@@ -1599,7 +1670,8 @@ function startWalkMap() {
   const startNode = { id: walkNodeCounter, room: 'Front Door', roomIsGuess: false, photo: null, legToNextFt: null, turnDirection: null };
   walkNodes = [startNode];
   walkPendingNode = startNode;
-  walkSegments = [];
+  walkFloors[walkFloorIdx].segments = [];
+  walkSegments = walkFloors[walkFloorIdx].segments;
   walkSegFtBase = 0;
   walkLastTurn = null;
   walkSelectedIdx = null;
@@ -1717,7 +1789,57 @@ function isCorridorName(n) {
   return CORRIDOR_WORDS.some((w) => t.includes(w));
 }
 
-let walkSegments = [];
+// Each floor is a completely separate plan — its own hallway spine, its own
+// rooms, saved independently. Walking up the stairs means starting a new
+// floor, not extending the old one, because a second storey has no spatial
+// relationship to the first that step counting could recover.
+const FLOOR_NAMES = ['Basement', '1st Floor', '2nd Floor', '3rd Floor', 'Attic'];
+let walkFloors = [{ name: '1st Floor', segments: [] }];
+let walkFloorIdx = 0;
+let walkSegments = walkFloors[0].segments;
+
+function renderFloorSelect() {
+  floorSelect.innerHTML = walkFloors
+    .map((f, i) => `<option value="${i}"${i === walkFloorIdx ? ' selected' : ''}>${escapeHtml(f.name)}</option>`)
+    .join('');
+}
+
+function setActiveFloor(i) {
+  if (i < 0 || i >= walkFloors.length) return;
+  walkFloorIdx = i;
+  walkSegments = walkFloors[i].segments;   // live reference, edits persist
+  walkSegFtBase = 0;
+  walkCurrentLegFt = 0;
+  walkLastTurn = null;
+  walkSelectedIdx = null;
+  renderFloorSelect();
+  renderWalkMap();
+}
+
+function addFloor() {
+  const used = walkFloors.map((f) => f.name);
+  // Adding a floor almost always means "we just went up the stairs", so walk
+  // up from the floor you're on rather than grabbing the first free label —
+  // otherwise stepping up from the 1st floor lands you in the Basement.
+  const here = FLOOR_NAMES.indexOf(walkFloors[walkFloorIdx].name);
+  let next = null;
+  for (let i = here + 1; i < FLOOR_NAMES.length && !next; i++) {
+    if (!used.includes(FLOOR_NAMES[i])) next = FLOOR_NAMES[i];
+  }
+  for (let i = here - 1; i >= 0 && !next; i--) {
+    if (!used.includes(FLOOR_NAMES[i])) next = FLOOR_NAMES[i];
+  }
+  if (!next) next = `Floor ${walkFloors.length + 1}`;
+  walkFloors.push({ name: next, segments: [] });
+  setActiveFloor(walkFloors.length - 1);
+  // Mid-walkthrough this is "we just went upstairs" — open the first space on
+  // the new floor (a landing, usually) so it has somewhere to record.
+  if (walkActive) {
+    beginRoomSegment('');
+    showRoomPrompt({ reason: 'segment' });
+  }
+}
+
 let walkSegFtBase = 0;   // feet from completed legs inside the current segment
 let walkLastTurn = null; // direction of the most recent turn, used to pick a side
 let walkSelectedIdx = null; // room clicked on the plan to branch the next one off
@@ -3238,6 +3360,7 @@ document.querySelectorAll('.tab-btn').forEach((btn) => {
 });
 
 newSession();
+renderFloorSelect();
 // Paint the empty plan box on first load too, so the front door is on screen
 // before anyone has walked anywhere — newSession() only fires on New Session.
 renderWalkMap();
