@@ -6,254 +6,507 @@
 <title>Assessment HUD — Operator</title>
 <script src="/rtc-config.js"></script>
 <style>
-  :root { color-scheme: dark; }
-  * { box-sizing: border-box; }
-  body { margin:0; background:#0a0b0d; color:#e8e8ea; font-family:-apple-system,system-ui,Segoe UI,Roboto,sans-serif; font-size:14px; }
+  /* =========================================================
+     Design tokens — every colour, radius and type size in the
+     interface resolves back to one of these, so the HUD stays
+     internally consistent instead of drifting per component.
+     ========================================================= */
+  :root {
+    color-scheme: dark;
 
-  header {
-    position:sticky; top:0; z-index:50; background:#121317; border-bottom:1px solid #23262d;
-    padding:12px 20px; display:flex; align-items:center; justify-content:space-between; gap:16px; flex-wrap:wrap;
+    --bg:#0b0d10;
+    --panel:#13161b;
+    --panel-2:#0f1216;
+    --inset:#0a0c0f;
+    --raised:#1a1e25;
+    --raised-hi:#232830;
+
+    --line:#242932;
+    --line-soft:#1b1f27;
+
+    --text:#e7e9ed;
+    --text-2:#98a0ac;
+    --text-3:#697180;
+
+    --accent:#2f6feb;
+    --accent-hi:#3f7df5;
+    --accent-2:#8fb0f2;
+    --accent-dim:rgba(47,111,235,.13);
+
+    --ok:#2fa36b;
+    --ok-2:#74d0a4;
+    --warn-2:#e8bd6d;
+    --danger:#d1493f;
+    --danger-2:#e88a83;
+
+    --r-sm:6px;
+    --r-md:8px;
+    --r-lg:12px;
+
+    --shadow:0 14px 38px rgba(0,0,0,.5);
+    --mono:ui-monospace,SFMono-Regular,"SF Mono",Menlo,Consolas,monospace;
+    --sans:-apple-system,system-ui,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
   }
-  .header-left { display:flex; align-items:center; gap:16px; }
-  header h1 { font-size:15px; margin:0; font-weight:700; letter-spacing:-.01em; }
-  #status { display:flex; align-items:center; gap:6px; font-size:12px; color:#9a9ca3; }
-  .dot { width:7px; height:7px; border-radius:50%; background:#e5484d; }
-  .dot.live { background:#30c85e; }
-  .header-right { display:flex; align-items:center; gap:8px; flex-wrap:wrap; }
-  .header-input { padding:9px 11px; border-radius:8px; border:1px solid #2b2e36; background:#0d0e12; color:#eee; font-size:12.5px; width:160px; }
-  .header-input.wide { width:230px; }
-  .assessor-picker { display:flex; align-items:center; gap:6px; font-size:12.5px; color:#9a9ca3; }
-  .assessor-picker select { padding:8px 10px; border-radius:8px; border:1px solid #2b2e36; background:#0d0e12; color:#eee; font-size:12.5px; }
 
-  main { max-width:1400px; margin:0 auto; padding:20px; display:grid; grid-template-columns: 1fr 400px; gap:20px; align-items:start; }
-  @media (max-width: 1050px) { main { grid-template-columns: 1fr; } }
+  * { box-sizing:border-box; }
+  body {
+    margin:0; background:var(--bg); color:var(--text);
+    font-family:var(--sans); font-size:14px; line-height:1.45;
+    -webkit-font-smoothing:antialiased;
+  }
 
-  button { border:0; border-radius:9px; padding:10px 16px; font-size:13px; font-weight:600; background:#2f7dfa; color:#fff; cursor:pointer; }
-  button:hover { filter:brightness(1.08); }
-  button.secondary { background:#1f2128; color:#d8d9dd; border:1px solid #2b2e36; }
-  button:disabled { opacity:.35; cursor:default; }
+  /* Consistent, unobtrusive scrollbars throughout the panels. */
+  * { scrollbar-width:thin; scrollbar-color:#2b313b transparent; }
+  *::-webkit-scrollbar { width:9px; height:9px; }
+  *::-webkit-scrollbar-track { background:transparent; }
+  *::-webkit-scrollbar-thumb { background:#2b313b; border-radius:99px; border:2px solid transparent; background-clip:content-box; }
+  *::-webkit-scrollbar-thumb:hover { background:#39414d; background-clip:content-box; }
 
-  h2, .section-title { font-size:11.5px; text-transform:uppercase; letter-spacing:.06em; color:#8b8d94; margin:18px 0 8px; }
+  /* ---------- Form controls: one shared appearance ---------- */
+  input, select, textarea {
+    font-family:inherit; font-size:13px; color:var(--text);
+    background:var(--inset); border:1px solid var(--line);
+    border-radius:var(--r-md); padding:9px 11px; outline:none;
+    transition:border-color .12s ease, box-shadow .12s ease;
+  }
+  input::placeholder, textarea::placeholder { color:var(--text-3); }
+  input:focus, select:focus, textarea:focus {
+    border-color:var(--accent); box-shadow:0 0 0 3px var(--accent-dim);
+  }
+  select { cursor:pointer; }
+
+  /* ---------- Buttons ---------- */
+  button {
+    font-family:inherit; border:1px solid transparent; border-radius:var(--r-md);
+    padding:9px 15px; font-size:12.5px; font-weight:600; letter-spacing:.005em;
+    background:var(--accent); color:#fff; cursor:pointer;
+    transition:background .12s ease, border-color .12s ease, color .12s ease, opacity .12s ease;
+  }
+  button:hover:not(:disabled) { background:var(--accent-hi); }
+  button:focus-visible { outline:none; box-shadow:0 0 0 3px var(--accent-dim); }
+  button.secondary { background:var(--raised); color:var(--text); border-color:var(--line); }
+  button.secondary:hover:not(:disabled) { background:var(--raised-hi); border-color:#2f3742; }
+  button:disabled { opacity:.38; cursor:not-allowed; }
+
+  /* ---------- Typography helpers ---------- */
+  h2, .section-title {
+    font-size:10.5px; text-transform:uppercase; letter-spacing:.1em;
+    color:var(--text-3); font-weight:700; margin:20px 0 9px;
+    display:flex; align-items:center; gap:9px;
+  }
+  h2::after, .section-title::after {
+    content:""; flex:1; height:1px; background:var(--line-soft);
+  }
   .section-title:first-child, h2:first-child { margin-top:0; }
-  .hint { font-size:12px; color:#8b8d94; margin:8px 0 0; line-height:1.5; }
+  .hint { font-size:11.5px; color:var(--text-3); margin:8px 0 0; line-height:1.55; }
 
-  /* ---- Video column ---- */
+  /* =========================================================
+     Header
+     ========================================================= */
+  header {
+    position:sticky; top:0; z-index:50;
+    background:linear-gradient(180deg,#14181e 0%,#11141a 100%);
+    border-bottom:1px solid var(--line);
+    padding:11px 22px; display:flex; align-items:center;
+    justify-content:space-between; gap:18px; flex-wrap:wrap;
+  }
+  .header-left { display:flex; align-items:center; gap:14px; }
+  .brand { display:flex; align-items:center; gap:10px; }
+  .brand-mark {
+    width:26px; height:26px; border-radius:var(--r-sm); flex:0 0 auto;
+    background:linear-gradient(145deg,var(--accent) 0%,#1d4fb5 100%);
+    display:flex; align-items:center; justify-content:center;
+    font-size:12px; font-weight:800; color:#fff; letter-spacing:-.02em;
+  }
+  header h1 {
+    font-size:14px; margin:0; font-weight:700; letter-spacing:-.01em; line-height:1.1;
+  }
+  .brand-sub {
+    display:block; font-size:9.5px; font-weight:600; letter-spacing:.14em;
+    text-transform:uppercase; color:var(--text-3); margin-top:1px;
+  }
+  #status {
+    display:flex; align-items:center; gap:7px; font-size:11.5px; color:var(--text-2);
+    background:var(--panel-2); border:1px solid var(--line);
+    border-radius:99px; padding:5px 12px 5px 10px;
+  }
+  .dot { width:7px; height:7px; border-radius:50%; background:var(--danger); flex:0 0 auto; }
+  .dot.live { background:var(--ok); box-shadow:0 0 0 3px rgba(47,163,107,.18); }
+
+  .header-right { display:flex; align-items:center; gap:8px; flex-wrap:wrap; }
+  .header-input { font-size:12.5px; padding:8px 11px; width:165px; }
+  .header-input.wide { width:240px; }
+  .assessor-picker {
+    display:flex; align-items:center; gap:7px; font-size:10.5px;
+    text-transform:uppercase; letter-spacing:.09em; font-weight:700; color:var(--text-3);
+  }
+  .assessor-picker select { font-size:12.5px; padding:8px 10px; }
+
+  /* =========================================================
+     Layout
+     ========================================================= */
+  main {
+    max-width:1440px; margin:0 auto; padding:20px 22px 34px;
+    display:grid; grid-template-columns:1fr 410px; gap:20px; align-items:start;
+  }
+  @media (max-width:1080px) { main { grid-template-columns:1fr; } }
+
+  /* ---------- Video column ---------- */
   .video-col { display:flex; flex-direction:column; gap:14px; }
-  .link-bar { display:flex; gap:8px; align-items:center; background:#14161b; border:1px solid #23262d; border-radius:12px; padding:12px 14px; }
-  .link-bar input { flex:1; padding:9px 10px; border-radius:8px; border:1px solid #2b2e36; background:#0d0e12; color:#eee; font-size:12.5px; }
-  #videoWrap { position:relative; width:100%; aspect-ratio:16/9; background:#000; border-radius:14px; overflow:hidden; border:1px solid #23262d; }
-  #remoteVideo { width:100%; height:100%; object-fit:cover; background:#000; }
-  #selfBox { position:absolute; bottom:14px; right:14px; width:140px; height:100px; border-radius:10px; overflow:hidden; border:2px solid rgba(255,255,255,.65); background:#111; }
+  .link-bar {
+    display:flex; gap:8px; align-items:center;
+    background:var(--panel); border:1px solid var(--line);
+    border-radius:var(--r-lg); padding:11px 13px;
+  }
+  .link-bar input { flex:1; font-size:12.5px; font-family:var(--mono); }
+  #videoWrap {
+    position:relative; width:100%; aspect-ratio:16/9; background:#000;
+    border-radius:var(--r-lg); overflow:hidden; border:1px solid var(--line);
+  }
+  #remoteVideo { width:100%; height:100%; object-fit:cover; background:#000; display:block; }
+  #selfBox {
+    position:absolute; bottom:14px; right:14px; width:144px; height:102px;
+    border-radius:var(--r-md); overflow:hidden;
+    border:1px solid rgba(255,255,255,.22); background:#000;
+    box-shadow:0 8px 22px rgba(0,0,0,.55);
+  }
   #selfBox video { width:100%; height:100%; object-fit:cover; }
-  .video-controls { display:flex; gap:8px; }
+  .video-controls { display:flex; gap:8px; align-items:stretch; flex-wrap:wrap; }
 
-  /* ---- Side column: room bar + tabs + panel ---- */
-  .side-col { display:flex; flex-direction:column; position:sticky; top:80px; max-height:calc(100vh - 100px); }
-  .room-bar { background:#14161b; border:1px solid #23262d; border-radius:12px 12px 0 0; border-bottom:0; padding:12px 14px; }
-  .room-bar label { font-size:10.5px; text-transform:uppercase; letter-spacing:.06em; color:#8b8d94; display:block; margin-bottom:6px; }
-  #roomSelect { width:100%; padding:9px 10px; border-radius:8px; border:1px solid #2b2e36; background:#0d0e12; color:#eee; font-size:13px; }
-  #roomCustomInput { width:100%; padding:9px 10px; border-radius:8px; border:1px solid #2b2e36; background:#0d0e12; color:#eee; font-size:13px; margin-top:6px; display:none; }
+  /* ---------- Side column ---------- */
+  .side-col {
+    display:flex; flex-direction:column; position:sticky; top:78px;
+    max-height:calc(100vh - 98px);
+  }
+  .room-bar {
+    background:var(--panel); border:1px solid var(--line); border-bottom:0;
+    border-radius:var(--r-lg) var(--r-lg) 0 0; padding:12px 14px;
+  }
+  .room-bar label {
+    font-size:9.5px; text-transform:uppercase; letter-spacing:.1em; font-weight:700;
+    color:var(--text-3); display:block; margin-bottom:7px;
+  }
+  #roomSelect { width:100%; }
+  #roomCustomInput { width:100%; margin-top:7px; display:none; }
 
-  .tabs { display:flex; background:#14161b; border-left:1px solid #23262d; border-right:1px solid #23262d; padding:4px; gap:4px; }
-  .tabs.no-room-bar { border-top:1px solid #23262d; border-radius:12px 12px 0 0; }
-  .tab-btn { flex:1; background:transparent; color:#9a9ca3; padding:9px 6px; font-size:12.5px; font-weight:600; border-radius:8px; }
-  .tab-btn.active { background:#2a2d34; color:#fff; }
+  .tabs {
+    display:flex; background:var(--panel);
+    border-left:1px solid var(--line); border-right:1px solid var(--line);
+    padding:5px; gap:4px;
+  }
+  .tabs.no-room-bar { border-top:1px solid var(--line); border-radius:var(--r-lg) var(--r-lg) 0 0; }
+  .tab-btn {
+    flex:1; background:transparent; color:var(--text-3); border:0;
+    padding:8px 6px; font-size:11.5px; font-weight:700; border-radius:var(--r-sm);
+    letter-spacing:.01em;
+  }
+  .tab-btn:hover:not(.active) { background:var(--panel-2); color:var(--text-2); }
+  .tab-btn.active { background:var(--raised-hi); color:var(--text); }
 
   .tab-panel {
-    background:#14161b; border:1px solid #23262d; border-top:0; border-radius:0 0 12px 12px;
+    background:var(--panel); border:1px solid var(--line); border-top:0;
+    border-radius:0 0 var(--r-lg) var(--r-lg);
     padding:16px; flex:1; min-height:0; overflow:auto;
   }
 
-  #log { display:flex; flex-direction:column; gap:10px; }
-  .measure-card { background:#0d0e11; border:1px solid #262a31; border-radius:10px; padding:10px; }
-  .measure-card .mode { font-size:11px; color:#8ab4ff; text-transform:uppercase; letter-spacing:.05em; }
-  .measure-card .val { font-size:22px; font-weight:700; margin:2px 0; }
-  .measure-card .sub { font-size:11px; color:#888; }
-  .measure-card img { width:100%; border-radius:6px; margin-top:8px; display:block; }
-  #empty, #photoEmpty { color:#666; font-size:13px; text-align:center; padding:20px 0; }
+  /* ---------- Measurement log ---------- */
+  #log { display:flex; flex-direction:column; gap:9px; }
+  .measure-card {
+    background:var(--panel-2); border:1px solid var(--line-soft);
+    border-radius:var(--r-md); padding:11px 12px;
+  }
+  .measure-card .mode {
+    font-size:9.5px; color:var(--accent-2); text-transform:uppercase;
+    letter-spacing:.11em; font-weight:700;
+  }
+  .measure-card .val {
+    font-size:21px; font-weight:700; margin:3px 0 2px; letter-spacing:-.02em;
+    font-family:var(--mono); font-variant-numeric:tabular-nums;
+  }
+  .measure-card .sub { font-size:10.5px; color:var(--text-3); line-height:1.5; }
+  .measure-card .meta { font-size:10.5px; color:var(--text-3); }
+  .measure-card img { width:100%; border-radius:var(--r-sm); margin-top:9px; display:block; }
+  #empty, #photoEmpty {
+    color:var(--text-3); font-size:12px; text-align:center;
+    padding:24px 12px; line-height:1.6;
+    border:1px dashed var(--line); border-radius:var(--r-md);
+  }
 
-  .indicator { display:inline-flex; align-items:center; gap:6px; font-size:12px; color:#aaa; margin-bottom:10px; }
-  .indicator .idot { width:8px; height:8px; border-radius:50%; background:#555; }
-  .indicator .idot.on { background:#3ecf5f; }
-  .indicator .idot.off { background:#e33; }
-  #arRemoteRow { display:flex; gap:8px; margin-bottom:14px; }
+  /* ---------- Indicators + remote control rows ---------- */
+  .indicator {
+    display:inline-flex; align-items:center; gap:7px; font-size:11.5px;
+    color:var(--text-2); margin-bottom:10px;
+    background:var(--panel-2); border:1px solid var(--line-soft);
+    border-radius:99px; padding:5px 12px 5px 10px;
+  }
+  .indicator .idot { width:7px; height:7px; border-radius:50%; background:#4a515c; flex:0 0 auto; }
+  .indicator .idot.on { background:var(--ok); }
+  .indicator .idot.off { background:var(--danger); }
+  #arRemoteRow, #walkRemoteRow { display:flex; gap:8px; margin-bottom:13px; }
+  .btn-row { display:flex; gap:8px; }
+  .btn-row > button { flex:1; }
 
-  #photoWrap { position:relative; width:100%; background:#000; border-radius:10px; overflow:hidden; display:none; margin-top:10px; }
+  /* ---------- Photo measuring surface ---------- */
+  #photoWrap {
+    position:relative; width:100%; background:#000; border:1px solid var(--line);
+    border-radius:var(--r-md); overflow:hidden; display:none; margin-top:10px;
+  }
   #photoWrap img { width:100%; display:block; }
   #photoOverlay { position:absolute; inset:0; width:100%; height:100%; cursor:crosshair; }
-  #opCalibForm { display:none; background:#0d0e11; border:1px solid #262a31; border-radius:8px; padding:10px; margin-top:10px; }
-  #opCalibForm input { width:100%; padding:8px; border-radius:6px; border:1px solid #333; background:#15171b; color:#eee; font-size:14px; margin:6px 0; }
-  #opCalibForm select { width:100%; padding:8px; border-radius:6px; border:1px solid #333; background:#15171b; color:#eee; font-size:14px; margin:6px 0; }
-  #opCustomRectRow { display:none; gap:6px; align-items:center; }
-  #opCustomRectRow input { width:auto; flex:1; }
-  #opCustomRectRow select { width:auto; flex:0 0 90px; }
-  #photoCancelRow { display:none; gap:8px; margin-top:8px; }
+
+  #opCalibForm {
+    display:none; background:var(--panel-2); border:1px solid var(--line);
+    border-radius:var(--r-md); padding:12px; margin-top:10px;
+  }
+  #opCalibForm .form-title { font-size:12.5px; font-weight:600; margin-bottom:2px; }
+  #opCalibForm input, #opCalibForm select { width:100%; margin:6px 0 0; }
+  #opCustomRectRow { display:none; gap:6px; align-items:center; margin-top:6px; }
+  #opCustomRectRow input { width:auto; flex:1; margin:0; }
+  #opCustomRectRow select { width:auto; flex:0 0 96px; margin:0; }
+  #photoCancelRow { display:none; gap:8px; margin-top:9px; }
+
+  #measureUndoRow { display:none; gap:8px; align-items:center; margin:0 0 10px; }
+  #measureUndoRow button { flex:1; }
+
+  #autoScaleRow {
+    display:none; align-items:center; gap:8px; flex-wrap:wrap;
+    background:rgba(47,163,107,.07); border:1px solid rgba(47,163,107,.28);
+    border-radius:var(--r-md); padding:9px 11px; margin:0 0 10px;
+    font-size:11.5px; color:var(--ok-2);
+  }
+  #autoScaleRow input { width:62px; padding:5px 7px; font-size:12px; }
+  #autoScaleRow button { padding:5px 10px; font-size:11px; flex:0 0 auto; }
+
   #liveMeasureOverlay { position:absolute; inset:0; width:100%; height:100%; pointer-events:none; z-index:5; }
   #liveMeasureOverlay.active { pointer-events:auto; cursor:crosshair; }
   #liveMeasureBanner {
-    display:none; position:absolute; top:10px; left:10px; right:10px; z-index:6;
-    background:rgba(13,14,17,.9); border:1px solid #262a31; border-radius:8px; padding:8px 10px;
-    font-size:12.5px; color:#8fe3b8;
+    display:none; position:absolute; top:12px; left:12px; right:12px; z-index:6;
+    background:rgba(10,12,15,.92); border:1px solid var(--line);
+    border-radius:var(--r-md); padding:9px 12px;
+    font-size:12px; color:var(--ok-2); backdrop-filter:blur(6px);
   }
 
-  #photoGallery { display:flex; flex-direction:column; }
-  .photo-entry { background:#0d0e11; border:1px solid #262a31; border-radius:10px; padding:8px; margin-bottom:12px; }
-  .photo-entry img { width:100%; border-radius:6px; display:block; margin-bottom:6px; }
-  .photo-time { font-size:11px; color:#888; margin-bottom:4px; }
-  .photo-measure { font-size:12px; color:#8ab4ff; font-weight:600; margin-bottom:6px; }
-  .photo-desc { width:100%; min-height:52px; resize:vertical; padding:6px; border-radius:6px; border:1px solid #333; background:#15171b; color:#eee; font-size:12px; font-family:inherit; }
+  /* ---------- Room prompt modal ---------- */
+  #roomPromptOverlay {
+    display:none; position:fixed; inset:0; z-index:80;
+    background:rgba(6,8,11,.72); backdrop-filter:blur(3px);
+    align-items:center; justify-content:center; padding:20px;
+  }
+  #roomPromptCard {
+    background:var(--panel); border:1px solid var(--line); border-radius:var(--r-lg);
+    padding:20px; width:min(380px,100%); box-shadow:var(--shadow);
+  }
+  #roomPromptTitle { font-size:15px; font-weight:700; margin-bottom:5px; letter-spacing:-.01em; }
+  #roomPromptCard select, #roomPromptCard input { width:100%; margin-top:8px; }
 
+  /* ---------- Photo memory bank ---------- */
+  #photoGallery { display:flex; flex-direction:column; gap:11px; }
+  .photo-entry {
+    background:var(--panel-2); border:1px solid var(--line-soft);
+    border-radius:var(--r-md); padding:10px;
+  }
+  .photo-entry img { width:100%; border-radius:var(--r-sm); display:block; margin-bottom:8px; }
+  .photo-time { font-size:10.5px; color:var(--text-3); margin-bottom:6px; letter-spacing:.01em; }
+  .photo-measure {
+    font-size:11.5px; color:var(--accent-2); font-weight:600; margin-bottom:7px;
+    font-variant-numeric:tabular-nums;
+  }
+  .photo-desc {
+    width:100%; min-height:54px; resize:vertical; padding:8px 9px;
+    font-size:12px; line-height:1.5;
+  }
+  .photo-delete-btn {
+    background:transparent; color:var(--danger-2); border:1px solid rgba(209,73,63,.35);
+    padding:4px 10px; font-size:10.5px; flex:0 0 auto;
+  }
+  .photo-delete-btn:hover:not(:disabled) { background:rgba(209,73,63,.14); border-color:rgba(209,73,63,.55); }
+
+  /* ---------- Room measurement groups ---------- */
   #listenBtn { width:100%; }
-  #listenBtn.on { background:#1a7a3a; }
-  #roomMeasurements { margin-top:6px; margin-bottom:4px; }
-  .room-group { background:#0d0e11; border:1px solid #262a31; border-radius:8px; padding:8px; margin-bottom:8px; }
-  .room-group .room-name { font-size:11.5px; font-weight:700; color:#8ab4ff; margin-bottom:4px; }
-  .room-group .room-line { font-size:11.5px; color:#ccc; display:flex; justify-content:space-between; padding:2px 0; }
-  .room-group .room-line .rl-label { color:#999; }
-  .room-group .room-line.unlabeled .rl-label { color:#c0392b; }
-  #floorPlanGrid { display:grid; grid-template-columns: repeat(auto-fill, minmax(190px, 1fr)); gap:16px; align-items:start; }
-  .fp-card { display:flex; flex-direction:column; align-items:center; background:#0d0e11; border:1px solid #262a31; border-radius:10px; padding:10px; }
-  .fp-box { background:#12151a; border:2px solid #3a4048; border-radius:4px; position:relative; min-width:60px; min-height:60px; display:flex; flex-wrap:wrap; align-content:flex-start; gap:3px; padding:4px; overflow:hidden; }
-  .fp-box.estimated { border-style:dashed; }
-  .fp-box img { width:28px; height:28px; object-fit:cover; border-radius:3px; border:1px solid #262a31; cursor:zoom-in; }
-  .fp-label { font-size:11.5px; font-weight:700; color:#8ab4ff; margin-top:8px; text-align:center; max-width:170px; }
-  .fp-dims { font-size:10.5px; color:#888; text-align:center; }
-  .fp-photo-count { font-size:10px; color:#666; text-align:center; margin-bottom:4px; }
-  .fp-measurements { margin-top:8px; width:100%; }
-  .fp-measure-line { font-size:10.5px; color:#ccc; display:flex; justify-content:space-between; gap:6px; padding:3px 0; border-bottom:1px solid #1c1f26; }
-  .fp-measure-line .fp-m-label { color:#999; white-space:nowrap; }
+  #listenBtn.on { background:var(--ok); }
+  #listenBtn.on:hover:not(:disabled) { background:#37b87a; }
+  #roomMeasurements { margin-top:6px; margin-bottom:4px; display:flex; flex-direction:column; gap:8px; }
+  .room-group {
+    background:var(--panel-2); border:1px solid var(--line-soft);
+    border-radius:var(--r-md); padding:10px 11px;
+  }
+  .room-group .room-name {
+    font-size:10px; font-weight:700; color:var(--accent-2);
+    text-transform:uppercase; letter-spacing:.09em; margin-bottom:6px;
+  }
+  .room-group .room-line {
+    font-size:11.5px; color:var(--text); display:flex; justify-content:space-between;
+    gap:10px; padding:3px 0; font-variant-numeric:tabular-nums;
+  }
+  .room-group .room-line + .room-line { border-top:1px solid var(--line-soft); }
+  .room-group .room-line .rl-label { color:var(--text-3); font-variant-numeric:normal; }
+  .room-group .room-line.unlabeled .rl-label { color:var(--warn-2); }
+
+  /* ---------- Floor plan ---------- */
+  #floorPlanGrid {
+    display:grid; grid-template-columns:repeat(auto-fill,minmax(190px,1fr));
+    gap:14px; align-items:start;
+  }
+  .fp-card {
+    display:flex; flex-direction:column; align-items:center;
+    background:var(--panel-2); border:1px solid var(--line-soft);
+    border-radius:var(--r-md); padding:12px 11px;
+  }
+  .fp-box {
+    background:#101419; border:2px solid #333b46; border-radius:var(--r-sm);
+    position:relative; min-width:62px; min-height:62px; display:flex; flex-wrap:wrap;
+    align-content:flex-start; gap:3px; padding:5px; overflow:hidden;
+  }
+  .fp-box.estimated { border-style:dashed; border-color:#3d4550; }
+  .fp-box img { width:28px; height:28px; object-fit:cover; border-radius:3px; border:1px solid var(--line); cursor:zoom-in; }
+  .fp-label {
+    font-size:11px; font-weight:700; color:var(--accent-2); margin-top:10px;
+    text-align:center; max-width:170px; text-transform:uppercase; letter-spacing:.06em;
+  }
+  .fp-dims { font-size:10.5px; color:var(--text-2); text-align:center; font-variant-numeric:tabular-nums; margin-top:2px; }
+  .fp-photo-count { font-size:9.5px; color:var(--text-3); text-align:center; margin-bottom:4px; }
+  .fp-measurements { margin-top:10px; width:100%; }
+  .fp-measure-line {
+    font-size:10.5px; color:var(--text); display:flex; justify-content:space-between;
+    gap:8px; padding:4px 0; border-bottom:1px solid var(--line-soft);
+    font-variant-numeric:tabular-nums;
+  }
+  .fp-measure-line:last-child { border-bottom:0; }
+  .fp-measure-line .fp-m-label { color:var(--text-3); white-space:nowrap; font-variant-numeric:normal; }
   .fp-measure-line .fp-m-val { text-align:right; }
-  .fp-conf { display:block; color:#7fae7f; font-size:9px; }
-  .fp-photos { margin-top:8px; width:100%; display:flex; flex-direction:column; gap:6px; }
-  .fp-photo-row { display:flex; gap:6px; background:#0a0b0e; border:1px solid #1c1f26; border-radius:6px; padding:5px; }
+  .fp-conf { display:block; color:var(--ok-2); font-size:9px; opacity:.8; }
+  .fp-photos { margin-top:10px; width:100%; display:flex; flex-direction:column; gap:6px; }
+  .fp-photo-row {
+    display:flex; gap:8px; background:var(--inset); border:1px solid var(--line-soft);
+    border-radius:var(--r-sm); padding:6px;
+  }
   .fp-photo-row img { width:36px; height:36px; object-fit:cover; border-radius:4px; flex:0 0 auto; cursor:zoom-in; }
-  .fp-photo-row .fp-note-text { font-size:10px; color:#999; line-height:1.35; align-self:center; }
-  .fp-photo-row .fp-note-text.empty { font-style:italic; color:#555; }
+  .fp-photo-row .fp-note-text { font-size:10px; color:var(--text-2); line-height:1.4; align-self:center; }
+  .fp-photo-row .fp-note-text.empty { font-style:italic; color:var(--text-3); }
 
+  /* ---------- Checklist ---------- */
   #checklistReminder {
-    display:none; background:#3a2a0d; border:1px solid #6b4a12; color:#ffd38a;
-    border-radius:8px; padding:8px 10px; font-size:12px; margin-bottom:10px;
+    display:none; background:rgba(201,146,48,.1); border:1px solid rgba(201,146,48,.32);
+    color:var(--warn-2); border-radius:var(--r-md); padding:10px 12px;
+    font-size:11.5px; margin-bottom:11px; line-height:1.5;
   }
-  #checklistReminder button { background:none; border:0; color:#ffd38a; text-decoration:underline; padding:0; font-size:11px; margin-top:4px; }
+  #checklistReminder button {
+    background:none; border:0; color:var(--warn-2); text-decoration:underline;
+    padding:0; font-size:11px; margin-top:5px;
+  }
+  #checklistReminder button:hover { background:none; color:#f2d093; }
 
-  #checklistSearchWrap { position:relative; margin-bottom:10px; }
-  #checklistSearch {
-    width:100%; padding:9px 11px; border-radius:8px; border:1px solid #2b2e36;
-    background:#0d0e12; color:#eee; font-size:13px;
+  #checklistSearchWrap { position:relative; margin-bottom:11px; }
+  #checklistSearch { width:100%; }
+  #checklistSuggest, #addressSuggest {
+    display:none; position:absolute; left:0; right:0; top:100%; z-index:60; margin-top:5px;
+    background:var(--raised); border:1px solid var(--line); border-radius:var(--r-md);
+    overflow:hidden auto; max-height:240px; box-shadow:var(--shadow);
   }
-  #checklistSuggest {
-    display:none; position:absolute; left:0; right:0; top:100%; z-index:10; margin-top:4px;
-    background:#1a1c22; border:1px solid #2b2e36; border-radius:8px; overflow:hidden;
-    max-height:220px; overflow-y:auto;
+  #checklistSuggest div, #addressSuggest div {
+    padding:9px 12px; font-size:12.5px; color:var(--text); cursor:pointer;
+    border-bottom:1px solid var(--line-soft);
   }
-  #checklistSuggest div { padding:8px 11px; font-size:12.5px; color:#ddd; cursor:pointer; }
-  #checklistSuggest div:hover { background:#2a2d34; }
+  #checklistSuggest div:last-child, #addressSuggest div:last-child { border-bottom:0; }
+  #checklistSuggest div:hover, #addressSuggest div:hover { background:var(--accent-dim); color:#fff; }
 
-  /* Digital-display look for the scrolling checklist */
   #checklistItems {
-    font-family:'Courier New', Consolas, monospace;
-    background:#050705 repeating-linear-gradient(0deg, rgba(255,255,255,.025) 0px, rgba(255,255,255,.025) 1px, transparent 1px, transparent 3px);
-    border:1px solid #1c2a1c; border-radius:10px; padding:10px 12px;
-    height:420px; overflow-y:auto; scrollbar-width:thin;
-    position:relative;
+    background:var(--panel-2); border:1px solid var(--line-soft);
+    border-radius:var(--r-md); padding:4px 14px 12px;
+    height:430px; overflow-y:auto;
   }
-  #checklistItems::before {
-    content:""; position:absolute; inset:0; pointer-events:none; z-index:5; border-radius:10px;
-    background-image:url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg'><filter id='n'><feTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='2' stitchTiles='stitch'/></filter><rect width='100%25' height='100%25' filter='url(%23n)'/></svg>");
-    mix-blend-mode:overlay; animation:clCrackle 0.5s steps(3) infinite;
+  .cl-section {
+    font-size:9.5px; text-transform:uppercase; letter-spacing:.12em; font-weight:700;
+    color:var(--text-3); margin:16px 0 4px;
+    position:sticky; top:0; background:var(--panel-2); padding:8px 0 5px; z-index:2;
   }
-  @keyframes clCrackle {
-    0% { opacity:.14; }
-    30% { opacity:.24; }
-    55% { opacity:.09; }
-    80% { opacity:.2; }
-    100% { opacity:.14; }
-  }
-  .cl-section { font-size:10px; text-transform:uppercase; letter-spacing:.12em; color:#3f5a3f; margin:14px 0 6px; }
   .cl-section:first-child { margin-top:0; }
-  .cl-item { border-bottom:1px solid #10190f; padding:7px 0; }
-  .cl-item .cl-label { font-size:12.5px; display:block; color:#8fae8f; }
-  .cl-item.checked .cl-label { color:#3ecf5f; text-shadow:0 0 6px rgba(62,207,95,.55); }
-  .cl-item.skipped .cl-label { color:#a5605f; text-decoration:line-through; }
-  .cl-item.na .cl-label { color:#c9a227; text-shadow:0 0 4px rgba(201,162,39,.4); font-style:italic; }
-  .cl-auto-tag { font-size:10px; color:#6fa0d8; display:block; margin-top:2px; }
-  .cl-toggles { display:flex; gap:5px; margin-top:5px; }
-  .cl-toggle { padding:3px 9px; font-size:10.5px; font-weight:600; background:#22252c; color:#999; border-radius:12px; }
-  .cl-toggle.active-checked { background:#1a7a3a; color:#fff; }
-  .cl-toggle.active-skipped { background:#4a2a2a; color:#fff; }
-  .cl-toggle.active-na { background:#4a4a2a; color:#fff; }
-  .cl-note { width:100%; margin-top:6px; padding:6px 8px; border-radius:6px; border:1px solid #2b2e36; background:#0d0e12; color:#eee; font-size:11.5px; font-family:inherit; }
-  .tag-row { display:flex; gap:5px; margin-top:8px; flex-wrap:wrap; }
-  .tag-btn { padding:3px 8px; font-size:10.5px; background:#2a2d34; color:#ccc; border-radius:10px; }
-  .tag-btn.active { background:#1e6fe0; color:#fff; }
-  .tag-missing { font-size:10.5px; color:#e0a13a; margin-top:6px; }
-
-  #moodBox {
-    display:flex; align-items:center; gap:10px; background:#1f2128; border:1px solid #2b2e36;
-    border-radius:9px; padding:8px 14px;
+  .cl-item { border-bottom:1px solid var(--line-soft); padding:9px 0; }
+  .cl-item:last-child { border-bottom:0; }
+  .cl-item .cl-label { font-size:12.5px; display:block; color:var(--text-2); line-height:1.45; }
+  .cl-item.checked .cl-label { color:var(--ok-2); }
+  .cl-item.skipped .cl-label { color:var(--text-3); text-decoration:line-through; }
+  .cl-item.na .cl-label { color:var(--warn-2); font-style:italic; }
+  .cl-auto-tag { font-size:9.5px; color:var(--accent-2); display:block; margin-top:3px; }
+  .cl-toggles { display:flex; gap:5px; margin-top:7px; }
+  .cl-toggle {
+    padding:3px 11px; font-size:10.5px; font-weight:600; background:var(--raised);
+    color:var(--text-3); border:1px solid var(--line-soft); border-radius:99px;
   }
-  #moodBox .mood-box-label { font-size:11px; color:#9a9ca3; line-height:1.3; }
-  #moodBox .mood-box-emoji { font-size:24px; line-height:1; }
-  #moodBox.mood-sad { border-color:#e0722a; background:rgba(224,114,42,.12); }
-  #moodBox.mood-meh { border-color:#e0c22a; background:rgba(224,194,42,.12); }
-  #moodBox.mood-happy { border-color:#3ecf5f; background:rgba(62,207,95,.12); }
+  .cl-toggle:hover:not(:disabled) { background:var(--raised-hi); color:var(--text-2); }
+  .cl-toggle.active-checked { background:var(--ok); border-color:var(--ok); color:#fff; }
+  .cl-toggle.active-skipped { background:#4b3230; border-color:#5c3d3a; color:var(--danger-2); }
+  .cl-toggle.active-na { background:#4a3d21; border-color:#5c4b28; color:var(--warn-2); }
+  .cl-note { width:100%; margin-top:7px; padding:7px 9px; font-size:11.5px; }
 
-  /* ---- Holographic EST clock, fixed bottom-left ---- */
+  .tag-row { display:flex; gap:5px; margin-top:9px; flex-wrap:wrap; }
+  .tag-btn {
+    padding:3px 10px; font-size:10.5px; background:var(--raised); color:var(--text-2);
+    border:1px solid var(--line-soft); border-radius:99px; font-weight:600;
+  }
+  .tag-btn:hover:not(.active) { background:var(--raised-hi); }
+  .tag-btn.active { background:var(--accent); border-color:var(--accent); color:#fff; }
+  .tag-missing { font-size:10.5px; color:var(--warn-2); margin-top:7px; }
+
+  /* ---------- Customer mood readout ---------- */
+  #moodBox {
+    display:flex; align-items:center; gap:11px; background:var(--panel);
+    border:1px solid var(--line); border-radius:var(--r-md); padding:7px 14px;
+    transition:border-color .2s ease, background .2s ease;
+  }
+  #moodBox .mood-box-label {
+    font-size:9.5px; color:var(--text-3); line-height:1.3;
+    text-transform:uppercase; letter-spacing:.09em; font-weight:700;
+  }
+  #moodBox .mood-box-emoji { font-size:23px; line-height:1; }
+  #moodBox.mood-sad { border-color:rgba(209,73,63,.5); background:rgba(209,73,63,.09); }
+  #moodBox.mood-meh { border-color:rgba(201,146,48,.5); background:rgba(201,146,48,.09); }
+  #moodBox.mood-happy { border-color:rgba(47,163,107,.5); background:rgba(47,163,107,.09); }
+
+  /* ---------- Session clock (bottom-left status readout) ---------- */
   #holoClock {
     position:fixed; bottom:18px; left:18px; z-index:200;
-    background:rgba(6,20,26,.55); border:1px solid rgba(90,230,255,.45); border-radius:10px;
-    padding:9px 16px; font-family:'Courier New', Consolas, monospace; color:#7ff3ff;
-    text-shadow:0 0 6px rgba(90,230,255,.85), 0 0 14px rgba(90,230,255,.5);
-    box-shadow:0 0 18px rgba(60,200,255,.25), inset 0 0 12px rgba(60,200,255,.08);
-    backdrop-filter:blur(3px); pointer-events:none; overflow:hidden;
-    animation:holoFlicker 3.2s infinite;
+    background:rgba(19,22,27,.94); border:1px solid var(--line);
+    border-radius:var(--r-md); padding:8px 14px;
+    box-shadow:var(--shadow); backdrop-filter:blur(8px); pointer-events:none;
   }
-  #holoClock::before {
-    content:""; position:absolute; inset:0;
-    background:repeating-linear-gradient(0deg, rgba(120,240,255,.06) 0px, rgba(120,240,255,.06) 1px, transparent 1px, transparent 3px);
-    mix-blend-mode:screen; animation:holoScan 6s linear infinite;
+  #holoClock .holo-time {
+    font-family:var(--mono); font-variant-numeric:tabular-nums;
+    font-size:19px; font-weight:600; letter-spacing:.02em; line-height:1.15; color:var(--text);
   }
-  #holoClock .holo-time { position:relative; font-size:23px; font-weight:700; letter-spacing:.05em; line-height:1.1; }
-  #holoClock .holo-date { position:relative; font-size:9.5px; letter-spacing:.2em; text-transform:uppercase; color:#4fd8ee; opacity:.85; margin-top:2px; }
-  @keyframes holoFlicker {
-    0%, 100% { opacity:1; } 92% { opacity:1; } 93% { opacity:.82; } 94% { opacity:1; } 96% { opacity:.9; } 97% { opacity:1; }
-  }
-  @keyframes holoScan {
-    0% { background-position-y:0; } 100% { background-position-y:40px; }
+  #holoClock .holo-date {
+    font-size:9px; letter-spacing:.18em; text-transform:uppercase;
+    color:var(--text-3); font-weight:700; margin-top:2px;
   }
 
-  /* ---- Walkthrough map (auto-tracked path) ---- */
-  #walkMapSvg polyline.walk-path { fill:none; stroke:#2f7dfa; stroke-width:3; }
-  #walkMapSvg polyline.walk-path-live { fill:none; stroke:#2f7dfa; stroke-width:2; stroke-dasharray:5 4; opacity:.6; }
-  #walkMapSvg circle.walk-node { fill:#14161b; stroke:#8ab4ff; stroke-width:2; }
-  #walkMapSvg circle.walk-node.walk-start { fill:#3ecf5f; stroke:#3ecf5f; }
-  #walkMapSvg text.walk-node-label { fill:#ccc; font-size:10px; font-family:-apple-system,system-ui,sans-serif; }
-  .walk-legend-row { display:flex; gap:8px; align-items:center; background:#0d0e11; border:1px solid #262a31; border-radius:8px; padding:6px 8px; margin-bottom:6px; }
+  /* ---------- Walkthrough map ---------- */
+  #walkMapSvg polyline.walk-path { fill:none; stroke:var(--accent); stroke-width:2.5; stroke-linejoin:round; stroke-linecap:round; }
+  #walkMapSvg polyline.walk-path-live { fill:none; stroke:var(--accent); stroke-width:2; stroke-dasharray:5 4; opacity:.55; }
+  #walkMapSvg circle.walk-node { fill:var(--panel); stroke:var(--accent-2); stroke-width:2; }
+  #walkMapSvg circle.walk-node.walk-start { fill:var(--ok); stroke:var(--ok); }
+  #walkMapSvg text.walk-node-label { fill:var(--text-2); font-size:10px; font-family:var(--sans); }
+  .walk-legend-row {
+    display:flex; gap:9px; align-items:center; background:var(--panel-2);
+    border:1px solid var(--line-soft); border-radius:var(--r-sm); padding:7px 8px; margin-bottom:6px;
+  }
   .walk-legend-row img { width:34px; height:34px; object-fit:cover; border-radius:4px; flex:0 0 auto; cursor:zoom-in; }
-  .walk-legend-thumb-empty { width:34px; height:34px; border-radius:4px; flex:0 0 auto; background:#1a1c22; }
+  .walk-legend-thumb-empty { width:34px; height:34px; border-radius:4px; flex:0 0 auto; background:var(--raised); }
   .walk-legend-body { flex:1; min-width:0; }
-  .walk-legend-meta { font-size:10px; color:#888; }
-  .walk-legend-name { width:100%; padding:5px 7px; border-radius:6px; border:1px solid #2b2e36; background:#15171b; color:#eee; font-size:12px; font-family:inherit; margin-top:2px; }
-  .walk-guess-tag { font-size:9.5px; color:#3ecf5f; }
-
-  /* ---- Address autocomplete dropdown ---- */
-  #addressSuggest {
-    display:none; position:absolute; left:0; right:0; top:100%; z-index:60; margin-top:4px;
-    background:#1a1c22; border:1px solid #2b2e36; border-radius:8px; overflow:hidden;
-    max-height:220px; overflow-y:auto; box-shadow:0 6px 18px rgba(0,0,0,.4);
-  }
-  #addressSuggest div { padding:8px 11px; font-size:12.5px; color:#ddd; cursor:pointer; }
-  #addressSuggest div:hover { background:#2a2d34; }
-
-  /* ---- Photo delete button ---- */
-  .photo-delete-btn { background:#3a1f1f; color:#e0a3a3; border:1px solid #4a2828; }
-  .photo-delete-btn:hover { background:#4a2626; }
+  .walk-legend-meta { font-size:9.5px; color:var(--text-3); text-transform:uppercase; letter-spacing:.07em; font-weight:700; }
+  .walk-legend-name { width:100%; padding:5px 8px; font-size:12px; margin-top:3px; }
+  .walk-guess-tag { font-size:9.5px; color:var(--ok-2); }
 </style>
 </head>
 <body>
 <header>
   <div class="header-left">
-    <h1>Assessment HUD</h1>
+    <div class="brand">
+      <div class="brand-mark">AH</div>
+      <div>
+        <h1>Assessment HUD</h1>
+        <span class="brand-sub">Field Operations Console</span>
+      </div>
+    </div>
     <div id="status"><span class="dot" id="dot"></span><span id="statusText">Starting…</span></div>
   </div>
   <div class="header-right">
@@ -264,7 +517,7 @@
     </div>
     <button id="endAssessmentBtn">End &amp; Export</button>
     <div class="assessor-picker">
-      <span>Assessor -</span>
+      <span>Assessor</span>
       <select id="assessorSelect">
         <option value="">Select…</option>
         <option value="Trevor">Trevor</option>
@@ -274,6 +527,19 @@
     </div>
   </div>
 </header>
+
+<div id="roomPromptOverlay">
+  <div id="roomPromptCard">
+    <div id="roomPromptTitle">Which room are you in?</div>
+    <div id="roomPromptSub" class="hint" style="margin:0;"></div>
+    <select id="roomPromptSelect"></select>
+    <input id="roomPromptCustom" placeholder="Type room name" style="display:none;" />
+    <div class="btn-row" style="margin-top:14px;">
+      <button class="secondary" id="roomPromptSkipBtn">Not now</button>
+      <button id="roomPromptSetBtn">Set Room</button>
+    </div>
+  </div>
+</div>
 
 <main>
   <div class="video-col">
@@ -292,7 +558,7 @@
       <button id="camBtn" class="secondary">Enable My Camera/Mic</button>
       <button id="muteBtn" class="secondary" disabled>Mute Mic</button>
       <div id="moodBox">
-        <span class="mood-box-label">Customer's<br>Mood</span>
+        <span class="mood-box-label">Customer<br>Mood</span>
         <span class="mood-box-emoji" id="moodEmoji">—</span>
       </div>
     </div>
@@ -335,7 +601,7 @@
       </div>
       <div id="arRemoteRow" style="display:none;">
         <button id="dropPinBtn" disabled>Drop Pin</button>
-        <button id="resetArBtn" class="secondary">Reset</button>
+        <button id="resetArBtn" class="secondary">Undo Pins</button>
         <button id="endArBtn" class="secondary">End AR</button>
       </div>
 
@@ -347,17 +613,21 @@
         <button id="endWalkBtn" class="secondary">End Walkthrough</button>
       </div>
 
-      <div style="display:flex; gap:8px;">
-        <button id="takePhotoBtn" class="secondary" style="flex:1;">Take Photo</button>
-        <button id="liveMeasureBtn" class="secondary" style="flex:1;">Measure on Live Video</button>
-        <button id="capturePhotoBtn" class="secondary" style="flex:1;">Capture Photo to Measure</button>
+      <div class="btn-row">
+        <button id="takePhotoBtn" class="secondary">Take Photo</button>
+        <button id="liveMeasureBtn" class="secondary">Measure on Live Video</button>
+        <button id="capturePhotoBtn" class="secondary">Capture Photo</button>
       </div>
-      <p class="hint">"Measure on Live Video" taps points right on the feed — no photo saved. "Capture Photo to Measure" freezes a frame first if you want a saved record. Either way, it first scans for a person in frame to auto-scale from (assumed height shown below, adjustable) — if found, just tap the two points you want to measure. If no one's in frame, it falls back to tapping the 4 corners of a reference object (a door works great and is usually already in frame) for a more precise, angle-corrected measurement. Switching rooms above never ends this session.</p>
+      <p class="hint">"Measure on Live Video" taps points right on the feed — no photo saved. "Capture Photo to Measure" freezes a frame first if you want a saved record. Either way, it first scans for a person in frame to auto-scale from (assumed height shown below, adjustable) — if found, just tap the two points you want to measure. If no one's in frame, it falls back to tapping the 4 corners of a reference object (a door works great and is usually already in frame) for a more precise, angle-corrected measurement. Tapped a point in the wrong spot? Hit "Undo Last Point" (or Ctrl/Cmd+Z) — it works on the live feed and on a frozen photo. Switching rooms above never ends this session.</p>
       <div id="calibStatus" class="hint" style="margin:0 0 10px;"></div>
-      <div id="autoScaleRow" style="display:none; align-items:center; gap:8px; flex-wrap:wrap; background:#0d0e11; border:1px solid #262a31; border-radius:8px; padding:8px 10px; margin:0 0 10px; font-size:12px; color:#8fe3b8;">
-        <span>Assumed height:</span>
-        <input id="autoScaleHeightInput" type="number" value="66" style="width:56px; padding:5px 6px; border-radius:6px; border:1px solid #333; background:#15171b; color:#eee; font-size:12px;" /><span>in</span>
-        <button class="secondary" id="autoScaleManualBtn" style="padding:4px 9px; font-size:11px; flex:0 0 auto;">Use manual corners instead</button>
+      <div id="autoScaleRow">
+        <span>Assumed height</span>
+        <input id="autoScaleHeightInput" type="number" value="66" /><span>in</span>
+        <button class="secondary" id="autoScaleManualBtn">Use manual corners instead</button>
+      </div>
+      <div id="measureUndoRow">
+        <button class="secondary" id="undoPointBtn">&#8630; Undo Last Point</button>
+        <button class="secondary" id="clearPointsBtn">Clear All Points</button>
       </div>
 
       <div id="photoWrap">
@@ -365,7 +635,7 @@
         <canvas id="photoOverlay"></canvas>
       </div>
       <div id="opCalibForm">
-        <div style="font-size:13px;">Which object did you tap the 4 corners of?</div>
+        <div class="form-title">Which object did you tap the 4 corners of?</div>
         <select id="opRefObjectSelect"></select>
         <div id="opCustomRectRow">
           <input id="opCalibWidthInput" type="number" step="0.1" placeholder="Width e.g. 32" />
@@ -375,7 +645,7 @@
             <option value="ft">feet</option>
           </select>
         </div>
-        <div style="display:flex; margin-top:8px; gap:8px;">
+        <div class="btn-row" style="margin-top:10px;">
           <button class="secondary" id="opCalibCancelBtn">Redo corners</button>
           <button id="opCalibConfirmBtn">Use this</button>
         </div>
@@ -401,9 +671,9 @@
     <div class="tab-panel" id="tab-floorplan" style="display:none;">
       <div class="section-title" style="margin-top:0;">Walkthrough Map</div>
       <p class="hint" id="walkMapHint">Have the homeowner tap "Start Walkthrough" at the front door on their screen — turns and rooms are then logged automatically as they walk, using their phone's compass and step count. Positions are an estimate (this kind of tracking drifts over a full house), so treat this as a rough sketch of the route and turn order, not a precise blueprint. Room names are AI guesses from each waypoint's photo — correct any of them below.</p>
-      <div id="walkMapWrap" style="background:#0d0e11;border:1px solid #262a31;border-radius:10px;padding:10px;margin-bottom:10px;display:none;">
+      <div id="walkMapWrap" style="background:var(--panel-2);border:1px solid var(--line-soft);border-radius:var(--r-md);padding:11px;margin-bottom:11px;display:none;">
         <svg id="walkMapSvg" width="100%" height="240" style="display:block;"></svg>
-        <button class="secondary" id="downloadWalkMapBtn" style="width:100%;margin-top:8px;">Download Map Image</button>
+        <button class="secondary" id="downloadWalkMapBtn" style="width:100%;margin-top:9px;">Download Map Image</button>
       </div>
       <div id="walkLegend"></div>
       <div id="walkMapEmpty" class="hint" style="margin:0 0 18px;">No walkthrough recorded yet.</div>
@@ -430,7 +700,7 @@
 
 <div id="holoClock">
   <div class="holo-time" id="holoTime">--:--:--</div>
-  <div class="holo-date">EST</div>
+  <div class="holo-date">Eastern · Session Time</div>
 </div>
 
 <!-- Free, self-hosted (no API key, no per-call cost) object classifier used to
@@ -488,6 +758,13 @@ const checklistReminderEl = $('checklistReminder');
 const checklistSearchEl = $('checklistSearch');
 const checklistSuggestEl = $('checklistSuggest');
 const roomSelect = $('roomSelect');
+const measureUndoRow = $('measureUndoRow');
+const undoPointBtn = $('undoPointBtn');
+const clearPointsBtn = $('clearPointsBtn');
+const roomPromptOverlay = $('roomPromptOverlay');
+const roomPromptSelect = $('roomPromptSelect');
+const roomPromptCustom = $('roomPromptCustom');
+const roomPromptSub = $('roomPromptSub');
 const roomCustomInput = $('roomCustomInput');
 const roomMeasurementsEl = $('roomMeasurements');
 const roomMeasureEmpty = $('roomMeasureEmpty');
@@ -942,6 +1219,130 @@ roomCustomInput.addEventListener('input', () => {
   currentRoom = roomCustomInput.value.trim();
 });
 
+// Single place that changes the current room, so the sidebar dropdown and
+// the auto-popup dropdown can never drift out of sync with each other.
+function setCurrentRoom(name) {
+  const clean = (name || '').trim();
+  currentRoom = clean;
+  if (!clean) { roomSelect.value = ''; roomCustomInput.style.display = 'none'; return; }
+  const known = Array.from(roomSelect.options).some((o) => o.value === clean);
+  if (known) {
+    roomSelect.value = clean;
+    roomCustomInput.style.display = 'none';
+  } else {
+    roomSelect.value = '__custom';
+    roomCustomInput.style.display = 'block';
+    roomCustomInput.value = clean;
+  }
+}
+
+// ---------- Auto-appearing room picker ----------
+// The sidebar dropdown only helps if you remember to touch it, and in
+// practice you don't — you walk into the next room, take three photos, and
+// they all land under whatever room you set two rooms ago. So the same
+// dropdown now comes to you: it pops up on its own the moment the app has
+// reason to believe you changed rooms (a walkthrough turn) or notices
+// something is about to be filed with no room at all, pre-selected to the
+// AI's guess so confirming is one tap.
+let roomPromptNode = null;
+let roomPromptSuppressedUntil = 0;
+
+function populateRoomPromptSelect() {
+  roomPromptSelect.innerHTML = '';
+  Array.from(roomSelect.options).forEach((o) => {
+    const opt = document.createElement('option');
+    opt.value = o.value;
+    opt.textContent = o.value === '' ? 'Select room…' : o.textContent;
+    roomPromptSelect.appendChild(opt);
+  });
+}
+populateRoomPromptSelect();
+
+function roomPromptOpen() { return roomPromptOverlay.style.display === 'flex'; }
+
+function showRoomPrompt(opts) {
+  const o = opts || {};
+  if (roomPromptOpen()) {
+    // Already up — just upgrade the pre-selection if a guess arrived late.
+    if (o.guess && !roomPromptSelect.value) applyRoomGuessToPrompt(o.guess);
+    return;
+  }
+  if (Date.now() < roomPromptSuppressedUntil) return;
+  roomPromptNode = o.node || null;
+  roomPromptSub.textContent = o.reason === 'walk'
+    ? 'You just turned into a new space. Set it now and every photo and measurement from here files itself under this room.'
+    : o.guess
+      ? `This looks like a ${o.guess} to the AI — confirm it or pick the right one.`
+      : 'No room is set, so this would be filed under "Unassigned".';
+  roomPromptCustom.style.display = 'none';
+  roomPromptCustom.value = '';
+  roomPromptSelect.value = '';
+  if (o.guess) applyRoomGuessToPrompt(o.guess);
+  else if (currentRoom) roomPromptSelect.value = Array.from(roomPromptSelect.options).some((x) => x.value === currentRoom) ? currentRoom : '';
+  roomPromptOverlay.style.display = 'flex';
+  setTimeout(() => roomPromptSelect.focus(), 30);
+}
+
+function applyRoomGuessToPrompt(guess) {
+  if (Array.from(roomPromptSelect.options).some((x) => x.value === guess)) {
+    roomPromptSelect.value = guess;
+  } else {
+    roomPromptSelect.value = '__custom';
+    roomPromptCustom.style.display = 'block';
+    roomPromptCustom.value = guess;
+  }
+}
+
+function hideRoomPrompt(suppressMs) {
+  roomPromptOverlay.style.display = 'none';
+  roomPromptNode = null;
+  if (suppressMs) roomPromptSuppressedUntil = Date.now() + suppressMs;
+}
+
+roomPromptSelect.addEventListener('change', () => {
+  const isCustom = roomPromptSelect.value === '__custom';
+  roomPromptCustom.style.display = isCustom ? 'block' : 'none';
+  if (isCustom) roomPromptCustom.focus();
+});
+
+function commitRoomPrompt() {
+  const val = roomPromptSelect.value === '__custom' ? roomPromptCustom.value.trim() : roomPromptSelect.value;
+  if (!val) { roomPromptSelect.focus(); return; }
+  setCurrentRoom(val);
+  const node = roomPromptNode || (walkActive ? walkPendingNode : null);
+  if (node) { node.room = val; node.roomIsGuess = false; renderWalkMap(); }
+  // Anything already captured in this spot but filed as Unassigned almost
+  // certainly belongs to the room you just named — pull it over.
+  reassignUnassignedToCurrentRoom(val);
+  hideRoomPrompt(0);
+}
+
+// Photos/measurements taken in the seconds before you named the room are
+// from that same room, so re-file them instead of stranding them under
+// "Unassigned" where the floor plan can't use them.
+function reassignUnassignedToCurrentRoom(room) {
+  const cutoff = Date.now() - 3 * 60 * 1000;
+  let touched = false;
+  sessionPhotos.forEach((ph) => {
+    if ((!ph.room || ph.room === 'Unassigned') && ph.time && ph.time.getTime() > cutoff) {
+      ph.room = room; touched = true;
+      if (ph.rootEl) {
+        const t = ph.rootEl.querySelector('.photo-time');
+        if (t) t.textContent = t.textContent.replace(/^Unassigned/, room);
+      }
+    }
+  });
+  measurementLog.forEach((m) => {
+    if ((!m.room || m.room === 'Unassigned') && m.time && m.time > cutoff) { m.room = room; touched = true; }
+  });
+  if (touched) { renderRoomMeasurements(); renderFloorPlan(); }
+}
+
+$('roomPromptSetBtn').addEventListener('click', commitRoomPrompt);
+$('roomPromptSkipBtn').addEventListener('click', () => hideRoomPrompt(45000));
+roomPromptCustom.addEventListener('keydown', (e) => { if (e.key === 'Enter') commitRoomPrompt(); });
+roomPromptOverlay.addEventListener('click', (e) => { if (e.target === roomPromptOverlay) hideRoomPrompt(45000); });
+
 function renderRoomMeasurements() {
   if (!measurementLog.length) {
     roomMeasurementsEl.innerHTML = '';
@@ -1149,6 +1550,9 @@ function registerWalkTurn(direction, angle) {
   walkNodes.push(node);
   walkPendingNode = node;
   renderWalkMap();
+  // A logged turn is the single best signal that you've walked into a new
+  // space, so this is where the room dropdown surfaces on its own.
+  showRoomPrompt({ reason: 'walk', node });
 }
 
 function handleWalkPhoto(dataUrl) {
@@ -1163,6 +1567,9 @@ function handleWalkPhoto(dataUrl) {
         const guess = guessRoomFromPredictions(predictions);
         if (guess && !node.room) { node.room = guess; node.roomIsGuess = true; }
         renderWalkMap();
+        // If the picker is already open for this waypoint, fill in the guess
+        // so confirming the room is a single tap.
+        if (guess && roomPromptNode === node) showRoomPrompt({ reason: 'walk', node, guess });
       }).catch(() => {});
     };
     img.src = dataUrl;
@@ -1359,15 +1766,17 @@ function guessRoomFromPredictions(predictions) {
   return null;
 }
 
-function suggestRoomFromPhoto(dataUrl, entryDiv) {
+function suggestRoomFromPhoto(dataUrl, entryDiv, entry) {
   getMobilenetModel().then((model) => {
     const img = entryDiv.querySelector('img');
     const run = () => {
       model.classify(img).then((predictions) => {
         const guess = guessRoomFromPredictions(predictions);
         if (!guess) return;
+        if (entry) entry.aiGuess = guess;
+        if (!currentRoom && roomPromptOpen() && !roomPromptSelect.value) applyRoomGuessToPrompt(guess);
         const badge = document.createElement('div');
-        badge.style.cssText = 'font-size:10.5px;color:#3ecf5f;margin-bottom:4px;';
+        badge.style.cssText = 'font-size:10px;color:var(--ok-2);margin-bottom:5px;letter-spacing:.02em;';
         badge.textContent = `AI guess: ${guess} (unconfirmed — tap Room above to set it for real)`;
         entryDiv.insertBefore(badge, entryDiv.querySelector('.photo-desc'));
       }).catch((e) => console.warn('Room classify failed', e));
@@ -1400,7 +1809,14 @@ function addGalleryPhoto(dataUrl, mode) {
   div.querySelector('.photo-delete-btn').addEventListener('click', () => deleteGalleryPhoto(entry));
   photoGallery.prepend(div);
   renderFloorPlan();
-  suggestRoomFromPhoto(dataUrl, div);
+  suggestRoomFromPhoto(dataUrl, div, entry);
+
+  // Nothing gets quietly filed under "Unassigned" anymore — if no room is
+  // set, ask. Short delay gives the on-device classifier a chance to land a
+  // guess first so the dropdown opens pre-filled.
+  if (!currentRoom) {
+    setTimeout(() => { if (!currentRoom) showRoomPrompt({ reason: 'photo', guess: entry.aiGuess }); }, 1400);
+  }
 
   // As soon as a photo tagged to a real room comes in mid-walkthrough, label
   // the current waypoint on the live map with that room name right away —
@@ -1742,17 +2158,45 @@ function buildAndDownloadReport() {
   const html = `<!doctype html>
 <html><head><meta charset="utf-8"><title>Assessment Report — ${escapeHtml(address)}</title>
 <style>
-  body { font-family: -apple-system, system-ui, Segoe UI, Roboto, sans-serif; background:#fff; color:#111; margin:0; padding:32px; }
-  .wrap { max-width:900px; margin:0 auto; }
-  h1 { font-size:22px; margin-bottom:4px; }
-  .meta { color:#666; font-size:13px; margin-bottom:24px; }
-  h2 { font-size:16px; border-bottom:2px solid #eee; padding-bottom:6px; margin-top:32px; }
-  ul { padding-left:20px; }
-  li { margin-bottom:4px; }
+  * { box-sizing:border-box; }
+  body {
+    font-family:-apple-system, system-ui, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    background:#f4f5f7; color:#1a1d21; margin:0; padding:36px 20px; font-size:14px; line-height:1.55;
+  }
+  .wrap { max-width:920px; margin:0 auto; background:#fff; border:1px solid #e2e5ea; border-radius:10px; padding:40px 44px 48px; }
+  .doc-head { display:flex; align-items:flex-start; gap:14px; border-bottom:2px solid #1a1d21; padding-bottom:18px; margin-bottom:8px; }
+  .doc-mark {
+    width:38px; height:38px; border-radius:7px; flex:0 0 auto; background:#2f6feb; color:#fff;
+    display:flex; align-items:center; justify-content:center; font-weight:800; font-size:15px; letter-spacing:-.02em;
+  }
+  .doc-kicker { font-size:10px; text-transform:uppercase; letter-spacing:.16em; color:#6a7280; font-weight:700; }
+  h1 { font-size:23px; margin:2px 0 0; letter-spacing:-.02em; line-height:1.2; }
+  .meta { color:#5b6270; font-size:12.5px; margin:14px 0 4px; display:flex; flex-wrap:wrap; gap:10px 26px; }
+  .meta b { color:#1a1d21; font-weight:600; }
+  h2 {
+    font-size:11px; text-transform:uppercase; letter-spacing:.13em; color:#6a7280; font-weight:700;
+    border-bottom:1px solid #e2e5ea; padding-bottom:8px; margin:38px 0 14px;
+  }
+  ul { padding-left:19px; margin:0; }
+  li { margin-bottom:5px; }
+  @media print {
+    body { background:#fff; padding:0; }
+    .wrap { border:0; border-radius:0; padding:0; }
+    h2 { break-after:avoid; }
+  }
 </style>
 </head><body><div class="wrap">
-  <h1>${escapeHtml(address)}</h1>
-  <div class="meta">Customer: ${escapeHtml(customerName)} &nbsp;·&nbsp; Assessment date: ${now.toLocaleString()}</div>
+  <div class="doc-head">
+    <div class="doc-mark">AH</div>
+    <div>
+      <div class="doc-kicker">Property Assessment Report</div>
+      <h1>${escapeHtml(address)}</h1>
+    </div>
+  </div>
+  <div class="meta">
+    <span>Customer: <b>${escapeHtml(customerName)}</b></span>
+    <span>Assessment date: <b>${now.toLocaleString()}</b></span>
+  </div>
   <h2>Checklist</h2>
   <ul>${checklistHtml}</ul>
   <h2>Measurements by Room</h2>
@@ -1948,9 +2392,11 @@ autoScaleManualBtn.addEventListener('click', () => {
   resetAutoScale();
   opStage = 'calib';
   opCalibPts = [];
-  if (activeCtx && activeCanvas) activeCtx.clearRect(0, 0, activeCanvas.width, activeCanvas.height);
+  opTargetPts = [];
+  redrawMeasureOverlay();
   calibStatus.textContent = calibHint(0);
   if (activeCanvas === liveMeasureOverlay) liveMeasureBanner.textContent = calibHint(0);
+  updateMeasureUndoRow();
 });
 
 // Grabs a still frame from a live <video> element (used to save a photo
@@ -2017,6 +2463,7 @@ async function beginCalibration(canvas, ctx) {
     calibStatus.textContent = calibHint(0);
     if (canvas === liveMeasureOverlay) liveMeasureBanner.textContent = calibHint(0);
   }
+  updateMeasureUndoRow();
 }
 
 // ---- Capture Photo to Measure (freeze-frame, saves a photo record) ----
@@ -2075,12 +2522,101 @@ function stopLiveMeasure() {
     opHomography = null; opRefRealPts = null; opRefObjectLabel = '';
     resetAutoScale();
   }
+  updateMeasureUndoRow();
 }
 
 window.addEventListener('resize', () => {
   if (!liveMeasureActive) return;
   sizeLiveCanvas();
-  if (activeCanvas === liveMeasureOverlay) liveCtx.clearRect(0, 0, liveMeasureOverlay.width, liveMeasureOverlay.height);
+  if (activeCanvas === liveMeasureOverlay) redrawMeasureOverlay();
+});
+
+// ---- Undo / delete a tapped point (live video or frozen photo) ----
+// Points used to be painted straight onto the canvas as you tapped, which
+// meant a misplaced tap was permanent short of starting the whole
+// measurement over. Everything now redraws from the point arrays instead,
+// so removing the last point is just popping the array and repainting.
+function setMeasureHint(text) {
+  calibStatus.textContent = text;
+  if (activeCanvas === liveMeasureOverlay) liveMeasureBanner.textContent = text;
+}
+
+function targetHint() {
+  if (opTargetPts.length === 1) return 'First point set — tap the second point. Undo below if that one landed wrong.';
+  return opAutoScaleMode
+    ? 'Auto-detected a person in frame as your scale reference — tap the two points you want to measure.'
+    : 'Now tap the two points you want to measure between.';
+}
+
+function redrawMeasureOverlay() {
+  if (!activeCtx || !activeCanvas) return;
+  activeCtx.clearRect(0, 0, activeCanvas.width, activeCanvas.height);
+  // Lines first, dots on top, so the numbered markers stay readable.
+  for (let i = 1; i < opCalibPts.length; i++) opDrawLine(opCalibPts[i - 1], opCalibPts[i], '#ffcc00');
+  if (opCalibPts.length === 4) opDrawLine(opCalibPts[3], opCalibPts[0], '#ffcc00');
+  if (opTargetPts.length === 2) opDrawLine(opTargetPts[0], opTargetPts[1], '#3ecf5f');
+  opCalibPts.forEach((pt, i) => opDrawPoint(pt.x, pt.y, '#ffcc00', i + 1));
+  opTargetPts.forEach((pt) => opDrawPoint(pt.x, pt.y, '#3ecf5f'));
+}
+
+function updateMeasureUndoRow() {
+  const live = !!opStage && !!activeCanvas;
+  measureUndoRow.style.display = live ? 'flex' : 'none';
+  if (!live) return;
+  const canUndo = opStage === 'calib'
+    ? opCalibPts.length > 0
+    : (opTargetPts.length > 0 || (!opAutoScaleMode && opCalibPts.length === 4));
+  undoPointBtn.disabled = !canUndo;
+  undoPointBtn.textContent = opStage === 'calib'
+    ? `\u21B6 Undo Last Corner${opCalibPts.length ? ` (${opCalibPts.length} placed)` : ''}`
+    : `\u21B6 Undo Last Point${opTargetPts.length ? ` (${opTargetPts.length} placed)` : ''}`;
+}
+
+function undoLastMeasurePoint() {
+  if (!opStage || !activeCanvas) return;
+  if (opStage === 'target' && opTargetPts.length) {
+    opTargetPts.pop();
+  } else if (opStage === 'target' && !opAutoScaleMode && opCalibPts.length === 4) {
+    // No target points left to remove, so step back out of the locked plane
+    // and let the last reference corner be re-tapped.
+    opHomography = null; opRefRealPts = null; opRefObjectLabel = '';
+    opCalibPts.pop();
+    opStage = 'calib';
+  } else if (opStage === 'calib' && opCalibPts.length) {
+    opCalibPts.pop();
+    opCalibForm.style.display = 'none';
+  } else {
+    return;
+  }
+  redrawMeasureOverlay();
+  setMeasureHint(opStage === 'calib' ? calibHint(opCalibPts.length) : targetHint());
+  updateMeasureUndoRow();
+}
+
+function clearMeasurePoints() {
+  if (!opStage || !activeCanvas) return;
+  opTargetPts = [];
+  if (opAutoScaleMode) {
+    opStage = 'target';
+  } else {
+    opCalibPts = [];
+    opHomography = null; opRefRealPts = null; opRefObjectLabel = '';
+    opCalibForm.style.display = 'none';
+    opStage = 'calib';
+  }
+  redrawMeasureOverlay();
+  setMeasureHint(opStage === 'calib' ? calibHint(0) : targetHint());
+  updateMeasureUndoRow();
+}
+
+undoPointBtn.addEventListener('click', undoLastMeasurePoint);
+clearPointsBtn.addEventListener('click', clearMeasurePoints);
+// Ctrl/Cmd+Z while a measurement is in progress, since that's the reflex.
+window.addEventListener('keydown', (e) => {
+  if (!opStage || !activeCanvas) return;
+  const tag = (e.target.tagName || '').toLowerCase();
+  if (tag === 'input' || tag === 'textarea' || tag === 'select') return;
+  if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'z') { e.preventDefault(); undoLastMeasurePoint(); }
 });
 
 // ---- Shared click handling for both canvases ----
@@ -2092,22 +2628,19 @@ function onMeasureCanvasClick(e) {
   const x = e.clientX - rect.left, y = e.clientY - rect.top;
   if (opStage === 'calib') {
     opCalibPts.push({ x, y });
-    opDrawPoint(x, y, '#ffcc00', opCalibPts.length);
-    if (opCalibPts.length > 1) {
-      opDrawLine(opCalibPts[opCalibPts.length - 2], opCalibPts[opCalibPts.length - 1], '#ffcc00');
-    }
+    redrawMeasureOverlay();
+    updateMeasureUndoRow();
     if (opCalibPts.length === 4) {
-      opDrawLine(opCalibPts[3], opCalibPts[0], '#ffcc00'); // close the quad
       opCalibForm.style.display = 'block';
     } else {
-      calibStatus.textContent = calibHint(opCalibPts.length);
-      if (canvas === liveMeasureOverlay) liveMeasureBanner.textContent = calibHint(opCalibPts.length);
+      setMeasureHint(calibHint(opCalibPts.length));
     }
   } else if (opStage === 'target') {
     opTargetPts.push({ x, y });
-    opDrawPoint(x, y, '#3ecf5f');
+    redrawMeasureOverlay();
+    updateMeasureUndoRow();
+    if (opTargetPts.length < 2) setMeasureHint(targetHint());
     if (opTargetPts.length === 2) {
-      opDrawLine(opTargetPts[0], opTargetPts[1], '#3ecf5f');
       let inches, confidenceText, refLabelUsed;
       if (opAutoScaleMode) {
         const pxDist = Math.hypot(opTargetPts[1].x - opTargetPts[0].x, opTargetPts[1].y - opTargetPts[0].y);
@@ -2148,6 +2681,7 @@ function onMeasureCanvasClick(e) {
       // clean slate instead of reusing a stale transform.
       opCalibPts = []; opTargetPts = []; opHomography = null; opRefRealPts = null; opRefObjectLabel = '';
       resetAutoScale();
+      updateMeasureUndoRow();
       if (canvas === photoOverlay) {
         if (ws) ws.send(JSON.stringify({ type: 'remote-photo-done' }));
         photoCancelRow.style.display = 'none';
@@ -2187,12 +2721,15 @@ function opDrawLine(a, b, color) {
 
 $('opCalibCancelBtn').addEventListener('click', () => {
   opCalibPts = [];
-  if (activeCtx && activeCanvas) activeCtx.clearRect(0, 0, activeCanvas.width, activeCanvas.height);
+  opTargetPts = [];
+  redrawMeasureOverlay();
   opCalibForm.style.display = 'none';
+  opStage = 'calib';
   calibStatus.textContent = calibHint(0);
   if (activeCanvas === liveMeasureOverlay) {
     liveMeasureBanner.textContent = calibHint(0);
   }
+  updateMeasureUndoRow();
 });
 
 $('opCalibConfirmBtn').addEventListener('click', () => {
@@ -2218,6 +2755,7 @@ $('opCalibConfirmBtn').addEventListener('click', () => {
   opCalibForm.style.display = 'none';
   opCalibWidthInput.value = ''; opCalibHeightInput.value = '';
   opStage = 'target';
+  updateMeasureUndoRow();
   const msg = 'Now tap the two points you want to measure between.';
   if (activeCanvas === liveMeasureOverlay) liveMeasureBanner.textContent = msg;
   calibStatus.textContent = `Plane locked from: ${refLabel} — set at ${new Date().toLocaleTimeString()}. ${msg} This calibration is only used for the measurement you're about to tap; the next one recalibrates from scratch.`;
@@ -2231,8 +2769,10 @@ $('cancelPhotoBtn').addEventListener('click', () => {
   if (ws) ws.send(JSON.stringify({ type: 'remote-photo-done' }));
   pendingMeasurePhoto = null;
   activeCanvas = null; activeCtx = null;
+  opCalibPts = []; opTargetPts = [];
   opHomography = null; opRefRealPts = null; opRefObjectLabel = '';
   resetAutoScale();
+  updateMeasureUndoRow();
 });
 
 // ---------- Tab switching ----------
