@@ -484,6 +484,15 @@
   /* ---------- Walkthrough floor plan ----------
      Drawn in real-world units: one SVG user unit == one foot, so wall
      thicknesses and lettering are specified the way a drafter would. */
+  #walkStartRow { display:flex; align-items:center; gap:11px; margin-bottom:11px; }
+  #walkStartRow button { flex:0 0 auto; }
+  #walkStartRow button.live { background:var(--danger); }
+  #walkStartRow button.live:hover:not(:disabled) { background:#e05a50; }
+  #walkStartStatus { font-size:11px; color:var(--text-3); line-height:1.4; }
+  #walkMapWrap {
+    background:var(--panel-2); border:1px solid var(--line-soft);
+    border-radius:var(--r-md); padding:11px; margin-bottom:11px;
+  }
   #walkMapSvg { background:#07090c; border-radius:var(--r-sm); display:block; }
   #walkMapSvg .wp-bg { fill:#07090c; }
   #walkMapSvg .wp-room { fill:#111721; stroke:#9fb0c9; stroke-width:.5; stroke-linejoin:miter; }
@@ -688,13 +697,16 @@
 
     <div class="tab-panel" id="tab-floorplan" style="display:none;">
       <div class="section-title" style="margin-top:0;">Walkthrough Map</div>
-      <p class="hint" id="walkMapHint">Have the homeowner tap "Start Walkthrough" at the front door — the plan then draws itself room by room as they walk, using their phone's compass and step count. The front door is always the fixed starting point at the bottom. Legs are snapped to right angles because a phone compass is far too noisy to trust the exact bearing, and houses are square anyway. Rooms sized from your "Width"/"Wall Length" tagged measurements are drawn with solid walls; anything we had to infer from stride count alone is drawn dashed. Treat it as a working sketch of layout and turn order, not a surveyed blueprint.</p>
-      <div id="walkMapWrap" style="background:var(--panel-2);border:1px solid var(--line-soft);border-radius:var(--r-md);padding:11px;margin-bottom:11px;display:none;">
-        <svg id="walkMapSvg" width="100%" height="360" style="display:block;"></svg>
+      <div id="walkStartRow">
+        <button id="startWalkBtn" disabled>Start Walkthrough</button>
+        <span id="walkStartStatus">Waiting for the homeowner to join…</span>
+      </div>
+      <div id="walkMapWrap">
+        <svg id="walkMapSvg" width="100%" height="360"></svg>
         <button class="secondary" id="downloadWalkMapBtn" style="width:100%;margin-top:9px;">Download Floor Plan</button>
       </div>
       <div id="walkLegend"></div>
-      <div id="walkMapEmpty" class="hint" style="margin:0 0 18px;">No walkthrough recorded yet.</div>
+      <p class="hint" id="walkMapHint" style="margin:0 0 18px;">Rooms you measure and tag "Width"/"Wall Length" draw with solid walls; anything inferred from stride count alone draws dashed. Legs snap to right angles — a phone compass is too noisy indoors to trust the exact bearing, and houses are square anyway. A working sketch of layout and turn order, not a surveyed blueprint.</p>
 
       <div class="section-title">Room Cards</div>
       <p class="hint">Rooms are drawn to scale from your "Width" and "Wall Length" tagged measurements. Each room card also lists every measurement taken there (with its confidence), and every photo with its description — everything from that room in one place.</p>
@@ -797,7 +809,8 @@ const endWalkBtn = $('endWalkBtn');
 const walkMapWrap = $('walkMapWrap');
 const walkMapSvg = $('walkMapSvg');
 const walkLegend = $('walkLegend');
-const walkMapEmpty = $('walkMapEmpty');
+const startWalkBtn = $('startWalkBtn');
+const walkStartStatus = $('walkStartStatus');
 const downloadWalkMapBtn = $('downloadWalkMapBtn');
 const assessorSelect = $('assessorSelect');
 let currentAssessor = '';
@@ -925,6 +938,7 @@ function connectWS() {
     const msg = JSON.parse(ev.data);
     if (msg.type === 'peer-joined' && msg.role === 'homeowner') {
       setStatus('Homeowner connected — negotiating video…', false);
+      setWalkControlState(walkActive ? 'live' : 'idle', walkActive ? 'Recording — rooms appear as they walk.' : 'Ready. The front door is always the starting point.');
       // Just create the connection — ensurePC() always gives it something
       // to negotiate (your camera track if it's on, or a receive-only slot
       // if it's not), so onnegotiationneeded fires the actual offer below.
@@ -933,6 +947,7 @@ function connectWS() {
     } else if (msg.type === 'peer-left' && msg.role === 'homeowner') {
       setStatus('Homeowner disconnected', false);
       remoteVideo.srcObject = null;
+      setWalkControlState('nopeer', 'Homeowner disconnected.');
     } else if (msg.type === 'answer') {
       // A stale answer can arrive after we've already rolled back our own
       // offer during a collision — only apply it if we're actually still
@@ -1139,9 +1154,9 @@ $('newBtn').addEventListener('click', () => {
   walkPendingNode = null;
   walkCurrentLegFt = 0;
   walkHeadingDeg = 0;
-  walkMapWrap.style.display = 'none';
-  walkMapEmpty.style.display = '';
   walkLegend.innerHTML = '';
+  setWalkControlState('nopeer', 'Waiting for the homeowner to join…');
+  renderWalkMap();
   walkIndicatorRow.style.display = 'none';
   walkRemoteRow.style.display = 'none';
   newSession();
@@ -1227,9 +1242,11 @@ roomSelect.addEventListener('change', () => {
     roomCustomInput.style.display = 'none';
     currentRoom = roomSelect.value;
   }
+  labelCurrentWaypoint(currentRoom);
 });
 roomCustomInput.addEventListener('input', () => {
   currentRoom = roomCustomInput.value.trim();
+  labelCurrentWaypoint(currentRoom);
 });
 
 // Single place that changes the current room, so the sidebar dropdown and
@@ -1237,6 +1254,7 @@ roomCustomInput.addEventListener('input', () => {
 function setCurrentRoom(name) {
   const clean = (name || '').trim();
   currentRoom = clean;
+  labelCurrentWaypoint(clean);
   if (!clean) { roomSelect.value = ''; roomCustomInput.style.display = 'none'; return; }
   const known = Array.from(roomSelect.options).some((o) => o.value === clean);
   if (known) {
@@ -1247,6 +1265,17 @@ function setCurrentRoom(name) {
     roomCustomInput.style.display = 'block';
     roomCustomInput.value = clean;
   }
+}
+
+// Whichever way a room gets named — sidebar dropdown, the pop-up picker, or
+// tagging a photo — the waypoint being walked right now takes that name and
+// the plan relabels itself immediately.
+function labelCurrentWaypoint(room) {
+  if (!room || !walkActive || !walkPendingNode) return;
+  if (walkPendingNode.room === room) return;
+  walkPendingNode.room = room;
+  walkPendingNode.roomIsGuess = false;
+  renderWalkMap();
 }
 
 // ---------- Auto-appearing room picker ----------
@@ -1519,6 +1548,29 @@ let walkNodeCounter = 0;
 
 function walkDegToRad(d) { return (d * Math.PI) / 180; }
 
+// The walkthrough never begins on its own — it starts when this button is
+// pressed here, which tells the homeowner's phone to begin. Their phone still
+// has its own button, but the assessor shouldn't have to talk someone through
+// finding it while they're standing at the front door.
+function setWalkControlState(state, note) {
+  const live = state === 'live';
+  startWalkBtn.textContent = live ? 'End Walkthrough' : 'Start Walkthrough';
+  startWalkBtn.classList.toggle('live', live);
+  startWalkBtn.disabled = state === 'nopeer';
+  walkStartStatus.textContent = note;
+}
+
+startWalkBtn.addEventListener('click', () => {
+  if (!ws) return;
+  if (walkActive) {
+    ws.send(JSON.stringify({ type: 'remote-end-walk' }));
+    setWalkControlState('idle', 'Ending walkthrough…');
+  } else {
+    ws.send(JSON.stringify({ type: 'remote-start-walk' }));
+    setWalkControlState('idle', 'Starting — have them stand at the front door.');
+  }
+});
+
 function startWalkMap() {
   walkActive = true;
   walkHeadingDeg = 0;
@@ -1528,8 +1580,7 @@ function startWalkMap() {
   const startNode = { id: walkNodeCounter, room: 'Front Door', roomIsGuess: false, photo: null, legToNextFt: null, turnDirection: null };
   walkNodes = [startNode];
   walkPendingNode = startNode;
-  walkMapWrap.style.display = '';
-  walkMapEmpty.style.display = 'none';
+  setWalkControlState('live', 'Recording — rooms appear as they walk.');
   renderWalkMap();
 }
 
@@ -1593,6 +1644,7 @@ function endWalkMap() {
   if (!walkActive) return;
   if (walkNodes.length) walkNodes[walkNodes.length - 1].legToNextFt = walkCurrentLegFt;
   walkActive = false;
+  setWalkControlState('idle', 'Walkthrough finished — the plan below is final.');
   renderWalkMap();
 }
 
@@ -1727,9 +1779,32 @@ function buildWalkPlan() {
   return rooms;
 }
 
+// Before anyone walks anywhere the box still shows, with the front door
+// already marked — so it reads as "the plan starts here" rather than an
+// empty panel with a sentence apologising for itself.
+function renderIdleWalkPlan() {
+  walkMapSvg.setAttribute('viewBox', '-30 -22 60 40');
+  walkMapSvg.setAttribute('preserveAspectRatio', 'xMidYMid meet');
+  walkMapSvg.innerHTML = `<defs>
+      <pattern id="wpGrid" width="2" height="2" patternUnits="userSpaceOnUse">
+        <path d="M2 0 L0 0 0 2" fill="none" stroke="#161c25" stroke-width="0.05" />
+      </pattern>
+      <marker id="wpArrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="3.2" markerHeight="3.2" orient="auto-start-reverse">
+        <path d="M0 0 L10 5 L0 10 z" fill="#d1493f" />
+      </marker>
+    </defs>
+    <rect class="wp-bg" x="-30" y="-22" width="60" height="40" />
+    <rect x="-30" y="-22" width="60" height="40" fill="url(#wpGrid)" />
+    <line class="wp-threshold" x1="-2.2" y1="0" x2="2.2" y2="0" stroke-width="0.5" />
+    <line class="wp-entry-arrow" x1="0" y1="5.5" x2="0" y2="-0.4" marker-end="url(#wpArrow)" />
+    <text class="wp-door-label" x="0" y="9.2" font-size="1.9">FRONT DOOR</text>
+    <text class="wp-dim-text" x="0" y="-5" font-size="1.9">Press Start Walkthrough — the plan draws from here</text>`;
+  renderWalkLegend();
+}
+
 function renderWalkMap() {
   const rooms = buildWalkPlan();
-  if (!rooms.length) { walkMapSvg.innerHTML = ''; renderWalkLegend(); return; }
+  if (!rooms.length) { renderIdleWalkPlan(); return; }
 
   let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
   rooms.forEach((r) => {
