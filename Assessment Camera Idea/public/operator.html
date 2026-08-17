@@ -450,6 +450,7 @@
 
   /* ---------- Customer mood readout ---------- */
   #moodBox {
+    margin-left:auto;
     display:flex; align-items:center; gap:11px; background:var(--panel);
     border:1px solid var(--line); border-radius:var(--r-md); padding:7px 14px;
     transition:border-color .2s ease, background .2s ease;
@@ -463,12 +464,13 @@
   #moodBox.mood-meh { border-color:rgba(201,146,48,.5); background:rgba(201,146,48,.09); }
   #moodBox.mood-happy { border-color:rgba(47,163,107,.5); background:rgba(47,163,107,.09); }
 
-  /* ---------- Session clock (bottom-left status readout) ---------- */
+  /* ---------- Session clock ----------
+     Sits in the control strip directly beneath the video rather than
+     floating over it, so it never covers part of the homeowner's feed. */
   #holoClock {
-    position:fixed; bottom:18px; left:18px; z-index:200;
-    background:rgba(19,22,27,.94); border:1px solid var(--line);
-    border-radius:var(--r-md); padding:8px 14px;
-    box-shadow:var(--shadow); backdrop-filter:blur(8px); pointer-events:none;
+    display:flex; flex-direction:column; justify-content:center; flex:0 0 auto;
+    background:var(--panel); border:1px solid var(--line);
+    border-radius:var(--r-md); padding:6px 15px; min-width:132px;
   }
   #holoClock .holo-time {
     font-family:var(--mono); font-variant-numeric:tabular-nums;
@@ -557,6 +559,10 @@
     <div class="video-controls">
       <button id="camBtn" class="secondary">Enable My Camera/Mic</button>
       <button id="muteBtn" class="secondary" disabled>Mute Mic</button>
+      <div id="holoClock">
+        <div class="holo-time" id="holoTime">--:--:--</div>
+        <div class="holo-date">Eastern · Session Time</div>
+      </div>
       <div id="moodBox">
         <span class="mood-box-label">Customer<br>Mood</span>
         <span class="mood-box-emoji" id="moodEmoji">—</span>
@@ -697,11 +703,6 @@
     </div>
   </div>
 </main>
-
-<div id="holoClock">
-  <div class="holo-time" id="holoTime">--:--:--</div>
-  <div class="holo-date">Eastern · Session Time</div>
-</div>
 
 <!-- Free, self-hosted (no API key, no per-call cost) object classifier used to
      suggest a room type from each captured photo. Runs entirely in this
