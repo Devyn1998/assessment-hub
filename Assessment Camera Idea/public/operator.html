@@ -699,6 +699,7 @@
       <div class="section-title" style="margin-top:0;">Walkthrough Map</div>
       <div id="walkStartRow">
         <button id="startWalkBtn" disabled>Start Walkthrough</button>
+        <button class="secondary" id="newRoomBtn" disabled>+ New Room</button>
         <span id="walkStartStatus">Waiting for the homeowner to join…</span>
       </div>
       <div id="walkMapWrap">
@@ -810,6 +811,7 @@ const walkMapWrap = $('walkMapWrap');
 const walkMapSvg = $('walkMapSvg');
 const walkLegend = $('walkLegend');
 const startWalkBtn = $('startWalkBtn');
+const newRoomBtn = $('newRoomBtn');
 const walkStartStatus = $('walkStartStatus');
 const downloadWalkMapBtn = $('downloadWalkMapBtn');
 const assessorSelect = $('assessorSelect');
@@ -1154,7 +1156,11 @@ $('newBtn').addEventListener('click', () => {
   walkPendingNode = null;
   walkCurrentLegFt = 0;
   walkHeadingDeg = 0;
+  walkSegments = [];
+  walkSegFtBase = 0;
+  walkLastTurn = null;
   walkLegend.innerHTML = '';
+  newRoomBtn.disabled = true;
   setWalkControlState('nopeer', 'Waiting for the homeowner to join…');
   renderWalkMap();
   walkIndicatorRow.style.display = 'none';
@@ -1271,10 +1277,13 @@ function setCurrentRoom(name) {
 // tagging a photo — the waypoint being walked right now takes that name and
 // the plan relabels itself immediately.
 function labelCurrentWaypoint(room) {
-  if (!room || !walkActive || !walkPendingNode) return;
-  if (walkPendingNode.room === room) return;
-  walkPendingNode.room = room;
-  walkPendingNode.roomIsGuess = false;
+  if (!room || !walkActive) return;
+  const seg = currentSegment();
+  if (seg && seg.name !== room) {
+    seg.name = room;
+    seg.corridor = isCorridorName(room);
+  }
+  if (walkPendingNode) { walkPendingNode.room = room; walkPendingNode.roomIsGuess = false; }
   renderWalkMap();
 }
 
@@ -1311,7 +1320,9 @@ function showRoomPrompt(opts) {
   }
   if (Date.now() < roomPromptSuppressedUntil) return;
   roomPromptNode = o.node || null;
-  roomPromptSub.textContent = o.reason === 'walk'
+  roomPromptSub.textContent = o.reason === 'segment'
+    ? 'Name this room. Everything until you press New Room again is filed here, and it draws on the plan off the hallway.'
+    : o.reason === 'walk'
     ? 'You just turned into a new space. Set it now and every photo and measurement from here files itself under this room.'
     : o.guess
       ? `This looks like a ${o.guess} to the AI — confirm it or pick the right one.`
@@ -1560,6 +1571,8 @@ function setWalkControlState(state, note) {
   walkStartStatus.textContent = note;
 }
 
+newRoomBtn.addEventListener('click', onNewRoomPressed);
+
 startWalkBtn.addEventListener('click', () => {
   if (!ws) return;
   if (walkActive) {
@@ -1580,8 +1593,22 @@ function startWalkMap() {
   const startNode = { id: walkNodeCounter, room: 'Front Door', roomIsGuess: false, photo: null, legToNextFt: null, turnDirection: null };
   walkNodes = [startNode];
   walkPendingNode = startNode;
-  setWalkControlState('live', 'Recording — rooms appear as they walk.');
+  walkSegments = [];
+  walkSegFtBase = 0;
+  walkLastTurn = null;
+  beginRoomSegment('');            // the space just inside the front door
+  newRoomBtn.disabled = false;
+  setWalkControlState('live', 'Recording — press New Room at each doorway.');
+  showRoomPrompt({ reason: 'segment' });
   renderWalkMap();
+}
+
+// One press per doorway: closes the current room and opens the next, then
+// asks what it is. Exactly one prompt per room, no phantom rooms.
+function onNewRoomPressed() {
+  if (!walkActive) return;
+  beginRoomSegment('');
+  showRoomPrompt({ reason: 'segment' });
 }
 
 function walkCurrentTip() {
@@ -1596,6 +1623,7 @@ function walkCurrentTip() {
 function updateWalkLegDistance(legFt) {
   if (!walkActive) return;
   walkCurrentLegFt = legFt;
+  updateCurrentSegmentFt();
   renderWalkMap();
 }
 
@@ -1613,10 +1641,12 @@ function registerWalkTurn(direction, angle) {
   const node = { id: walkNodeCounter, room: '', roomIsGuess: false, photo: null, legToNextFt: null, turnDirection: direction };
   walkNodes.push(node);
   walkPendingNode = node;
+  // Bank the leg we just finished into the current room, and remember which
+  // way they turned so the next room knows which side of the hall it's on.
+  walkSegFtBase += walkCurrentLegFt;
+  walkLastTurn = direction;
+  updateCurrentSegmentFt();
   renderWalkMap();
-  // A logged turn is the single best signal that you've walked into a new
-  // space, so this is where the room dropdown surfaces on its own.
-  showRoomPrompt({ reason: 'walk', node });
 }
 
 function handleWalkPhoto(dataUrl) {
@@ -1643,7 +1673,9 @@ function handleWalkPhoto(dataUrl) {
 function endWalkMap() {
   if (!walkActive) return;
   if (walkNodes.length) walkNodes[walkNodes.length - 1].legToNextFt = walkCurrentLegFt;
+  updateCurrentSegmentFt();
   walkActive = false;
+  newRoomBtn.disabled = true;
   setWalkControlState('idle', 'Walkthrough finished — the plan below is final.');
   renderWalkMap();
 }
@@ -1664,6 +1696,63 @@ function endWalkMap() {
 //      the number came from a real tagged measurement.
 const WALK_DEFAULT_ROOM_FT = 11;
 const WALK_MIN_ROOM_FT = 7;
+const WALK_CORRIDOR_FT = 4;      // a hallway is a corridor, not a room-sized box
+
+// A walk is a chain of ROOM SEGMENTS, not a chain of waypoints. Turns are
+// still recorded (they carry the distance and which way you went), but a turn
+// no longer invents a room — a phone compass can't tell a doorway from someone
+// rotating their body, which is how one walk produced thirteen "rooms" in a
+// straight line. A segment begins only when the assessor says so, so you get
+// exactly one prompt per room you actually walked into.
+const CORRIDOR_WORDS = ['hall', 'corridor', 'stair', 'entry', 'foyer', 'landing', 'front door'];
+function isCorridorName(n) {
+  const t = (n || '').toLowerCase();
+  return CORRIDOR_WORDS.some((w) => t.includes(w));
+}
+
+let walkSegments = [];
+let walkSegFtBase = 0;   // feet from completed legs inside the current segment
+let walkLastTurn = null; // direction of the most recent turn, used to pick a side
+
+function currentSegment() { return walkSegments[walkSegments.length - 1] || null; }
+
+function updateCurrentSegmentFt() {
+  const seg = currentSegment();
+  if (seg) seg.ft = walkSegFtBase + walkCurrentLegFt;
+}
+
+// Rooms hang off the nearest corridor. Walk hall -> bedroom -> back to hall ->
+// bathroom and both bedrooms attach to the hall, not to each other.
+function nearestCorridorIndex() {
+  for (let i = walkSegments.length - 1; i >= 0; i--) {
+    if (walkSegments[i].corridor) return i;
+  }
+  return 0;
+}
+
+function beginRoomSegment(name) {
+  updateCurrentSegmentFt();
+  const corridor = isCorridorName(name) || !walkSegments.length;
+  let parentIdx = null;
+  if (walkSegments.length) parentIdx = corridor ? walkSegments.length - 1 : nearestCorridorIndex();
+  const parent = parentIdx === null ? null : walkSegments[parentIdx];
+  let side = walkLastTurn === 'left' ? -1 : (walkLastTurn === 'right' ? 1 : null);
+  if (side === null && parent) {
+    // No turn to go on — alternate sides so rooms don't pile up on one wall.
+    const sibs = walkSegments.filter((x) => x.parentIdx === parentIdx && !x.corridor).length;
+    side = sibs % 2 === 0 ? 1 : -1;
+  }
+  walkSegments.push({
+    name: name || '', corridor, parentIdx,
+    side: side === null ? 1 : side,
+    atFt: parent ? parent.ft : 0,
+    ft: 0,
+  });
+  walkSegFtBase = 0;
+  walkCurrentLegFt = 0;
+  walkLastTurn = null;
+  renderWalkMap();
+}
 
 function ftInLabel(ft) {
   const whole = Math.floor(ft);
@@ -1691,115 +1780,106 @@ function walkSnapDir(dx, dy) {
   return { x: 0, y: Math.sign(dy) || -1 };
 }
 
-// Turn the recorded waypoints into laid-out rectangles, in feet, with the
-// front door pinned at (0,0) and the first leg heading "up" into the house.
-// Corner clearance handles a 90° turn, but people double back constantly —
-// into a bedroom and straight out again — which lands the next room right on
-// top of the one they just left. Slide any room that still collides sideways
-// (perpendicular to travel, whichever side is closer) until it's clear, which
-// is also what the real house does: you come out of one room and the next one
-// is beside it, not through it.
+// Two rooms can still land on the same stretch of wall — a bedroom and a
+// bathroom entered a few feet apart, say. Slide any room that collides along
+// the hall until it's clear, which is also what the real house does: they sit
+// side by side down the corridor, not through each other.
 function walkPushClear(r, dir, placed) {
   const perp = { x: -dir.y, y: dir.x };
   const hits = (a) => placed.some((p) =>
     Math.min(a.x + a.w, p.x + p.w) - Math.max(a.x, p.x) > 0.05 &&
     Math.min(a.y + a.h, p.y + p.h) - Math.max(a.y, p.y) > 0.05);
   if (!hits(r)) return;
-  for (let step = 1; step <= 60; step++) {
+  for (let step = 1; step <= 80; step++) {
     for (const sign of [1, -1]) {
       const dx = perp.x * sign * step, dy = perp.y * sign * step;
-      const trial = { x: r.x + dx, y: r.y + dy, w: r.w, h: r.h };
-      if (!hits(trial)) {
-        r.x = trial.x; r.y = trial.y;
-        r.entry.x += dx; r.entry.y += dy;
-        r.exit.x += dx; r.exit.y += dy;
+      if (!hits({ x: r.x + dx, y: r.y + dy, w: r.w, h: r.h })) {
+        r.x += dx; r.y += dy;
+        if (r.door) { r.door.y += dy; r.door.x += dx * 0; }
         return;
       }
     }
   }
 }
 
-function buildWalkPlan() {
-  if (!walkNodes.length) return [];
-  const tip = walkActive ? walkCurrentTip() : null;
-  const pts = tip ? [...walkPoints, tip] : walkPoints.slice();
-  const rooms = [];
-  let cursor = { x: 0, y: 0 };
-  let dir = { x: 0, y: -1 };
-
-  walkNodes.forEach((node, i) => {
-    const a = pts[i], b = pts[i + 1];
-    const prevDir = { ...dir };
-    if (a && b) {
-      const dx = b.x - a.x, dy = b.y - a.y;
-      if (Math.hypot(dx, dy) > 1) dir = walkSnapDir(dx, dy);
-    }
-
-    // A tagged measurement always beats a stride count, so when the assessor
-    // actually measured the room we draw those numbers and call it solid.
-    // Otherwise we fall back to how far they walked and mark it estimated.
-    const dims = walkRoomDimsFt(node.room);
-    const isLast = i === walkNodes.length - 1;
-    let lenFt, widthFt, guessed;
-    if (dims) {
-      lenFt = dims.long; widthFt = dims.short; guessed = false;
-    } else {
-      let leg = typeof node.legToNextFt === 'number' ? node.legToNextFt : null;
-      if (!leg && isLast && walkActive) leg = walkCurrentLegFt;
-      lenFt = Math.max(leg || WALK_DEFAULT_ROOM_FT, WALK_MIN_ROOM_FT);
-      widthFt = WALK_DEFAULT_ROOM_FT;
-      guessed = true;
-    }
-
-    // Turning a corner drops the new room straddling the shared corner
-    // point, on top of the one we just left. Step past the previous room's
-    // face first — this keeps the walked leg length intact.
-    const prev = rooms[rooms.length - 1];
-    if (prev && (dir.x !== prevDir.x || dir.y !== prevDir.y)) {
-      const clear = dir.x !== 0 ? prev.w / 2 : prev.h / 2;
-      cursor = { x: cursor.x + dir.x * clear, y: cursor.y + dir.y * clear };
-    }
-
-    const along = { x: dir.x * lenFt, y: dir.y * lenFt };
-    const cx = cursor.x + along.x / 2, cy = cursor.y + along.y / 2;
-    const w = Math.abs(along.x) || widthFt;
-    const h = Math.abs(along.y) || widthFt;
-
-    const room = {
-      node, index: i, dir: { ...dir },
-      x: cx - w / 2, y: cy - h / 2, w, h,
-      guessed,
-      entry: { ...cursor },
-      exit: { x: cursor.x + along.x, y: cursor.y + along.y },
-    };
-    walkPushClear(room, dir, rooms);
-    rooms.push(room);
-    cursor = { ...room.exit };
-  });
-  return rooms;
+// Lay the segments out like a plan: the corridor is a spine running up from
+// the front door, and each room attaches to its parent corridor on the side
+// they turned toward, at the distance along the hall where they entered it.
+// This is what stops the drawing being a single stacked column.
+function walkSegSize(seg) {
+  const dims = walkRoomDimsFt(seg.name);
+  if (dims) return { lenFt: dims.long, widthFt: dims.short, guessed: false };
+  const lenFt = Math.max(seg.ft || 0, seg.corridor ? WALK_MIN_ROOM_FT : WALK_DEFAULT_ROOM_FT, WALK_MIN_ROOM_FT);
+  return { lenFt, widthFt: seg.corridor ? WALK_CORRIDOR_FT : WALK_DEFAULT_ROOM_FT, guessed: true };
 }
 
-// Before anyone walks anywhere the box still shows, with the front door
-// already marked — so it reads as "the plan starts here" rather than an
-// empty panel with a sentence apologising for itself.
-function renderIdleWalkPlan() {
-  walkMapSvg.setAttribute('viewBox', '-30 -22 60 40');
-  walkMapSvg.setAttribute('preserveAspectRatio', 'xMidYMid meet');
-  walkMapSvg.innerHTML = `<defs>
-      <pattern id="wpGrid" width="2" height="2" patternUnits="userSpaceOnUse">
-        <path d="M2 0 L0 0 0 2" fill="none" stroke="#161c25" stroke-width="0.05" />
-      </pattern>
-      <marker id="wpArrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="3.2" markerHeight="3.2" orient="auto-start-reverse">
-        <path d="M0 0 L10 5 L0 10 z" fill="#d1493f" />
-      </marker>
-    </defs>
-    <rect class="wp-bg" x="-30" y="-22" width="60" height="40" />
-    <rect x="-30" y="-22" width="60" height="40" fill="url(#wpGrid)" />
-    <line class="wp-threshold" x1="-2.2" y1="0" x2="2.2" y2="0" stroke-width="0.5" />
-    <line class="wp-entry-arrow" x1="0" y1="5.5" x2="0" y2="-0.4" marker-end="url(#wpArrow)" />
-    <text class="wp-door-label" x="0" y="9.2" font-size="1.9">FRONT DOOR</text>
-    <text class="wp-dim-text" x="0" y="-5" font-size="1.9">Press Start Walkthrough — the plan draws from here</text>`;
-  renderWalkLegend();
+function buildWalkPlan() {
+  if (!walkSegments.length) return [];
+  const size = walkSegments.map(walkSegSize);
+
+  // Which rooms hang off which corridor.
+  const kids = walkSegments.map(() => []);
+  walkSegments.forEach((seg, i) => {
+    if (seg.parentIdx !== null && !seg.corridor) kids[seg.parentIdx].push(i);
+  });
+
+  // A corridor only accumulates distance while you're actually walking down
+  // it — step back into the hall to reach the next room and that stretch gets
+  // recorded inside the room you just left. So the walked length alone is
+  // always too short, and every room piles onto the same point. Grow each
+  // corridor to at least fit the rooms opening off it.
+  const corridorLen = walkSegments.map((seg, i) => {
+    if (!seg.corridor) return size[i].lenFt;
+    const perSide = [0, 0];
+    kids[i].forEach((k) => { perSide[walkSegments[k].side >= 0 ? 1 : 0] += size[k].lenFt; });
+    return Math.max(size[i].lenFt, perSide[0], perSide[1], WALK_MIN_ROOM_FT);
+  });
+
+  const rects = new Array(walkSegments.length);
+
+  // Corridors chain upward from the front door at the origin.
+  let baseY = 0;
+  walkSegments.forEach((seg, i) => {
+    if (!seg.corridor) return;
+    const w = size[i].widthFt, h = corridorLen[i];
+    rects[i] = { x: -w / 2, y: baseY - h, w, h };
+    baseY -= h;
+  });
+
+  // Rooms stack down their side of the hall in the order they were walked,
+  // which cannot overlap by construction — no shoving required.
+  walkSegments.forEach((seg, i) => {
+    if (seg.corridor) return;
+    const parent = rects[seg.parentIdx] || rects[0];
+    const sideIdx = seg.side >= 0 ? 1 : 0;
+    let offset = 0;
+    kids[seg.parentIdx].forEach((k) => {
+      if (k < i && (walkSegments[k].side >= 0 ? 1 : 0) === sideIdx) offset += size[k].lenFt;
+    });
+    const w = size[i].widthFt, h = size[i].lenFt;
+    const y = parent.y + parent.h - offset - h;
+    const x = seg.side >= 0 ? parent.x + parent.w : parent.x - w;
+    rects[i] = { x, y, w, h };
+  });
+
+  return walkSegments.map((seg, i) => {
+    const r = rects[i] || { x: 0, y: 0, w: WALK_DEFAULT_ROOM_FT, h: WALK_DEFAULT_ROOM_FT };
+    const parent = seg.parentIdx === null ? null : rects[seg.parentIdx];
+    let door = null;
+    if (parent) {
+      door = seg.corridor
+        ? { x: parent.x + parent.w / 2, y: parent.y, horizontal: true }
+        : { x: seg.side >= 0 ? parent.x + parent.w : parent.x, y: r.y + r.h / 2, horizontal: false };
+    }
+    return {
+      node: { room: seg.name }, index: i, seg,
+      guessed: size[i].guessed,
+      x: r.x, y: r.y, w: r.w, h: r.h, door,
+      dir: { x: 0, y: -1 },
+      entry: door ? { x: door.x, y: door.y } : { x: 0, y: 0 },
+      exit: { x: r.x + r.w / 2, y: r.y + r.h / 2 },
+    };
+  });
 }
 
 function renderWalkMap() {
@@ -1837,20 +1917,15 @@ function renderWalkMap() {
     svg += `<rect class="wp-room${r.guessed ? ' guessed' : ''}" x="${r.x.toFixed(2)}" y="${r.y.toFixed(2)}" width="${r.w.toFixed(2)}" height="${r.h.toFixed(2)}" />`;
   });
 
+  // Doorways: a gap punched through the shared wall where they walked in.
   const DOOR_FT = 3;
-  const doorAt = (pt, dir) => {
-    const perp = { x: -dir.y, y: dir.x };
-    const x1 = pt.x - perp.x * DOOR_FT / 2, y1 = pt.y - perp.y * DOOR_FT / 2;
-    const x2 = pt.x + perp.x * DOOR_FT / 2, y2 = pt.y + perp.y * DOOR_FT / 2;
+  const doorGap = (pt, horizontal) => {
+    const hx = horizontal ? DOOR_FT / 2 : 0, hy = horizontal ? 0 : DOOR_FT / 2;
+    const x1 = pt.x - hx, y1 = pt.y - hy, x2 = pt.x + hx, y2 = pt.y + hy;
     return `<line class="wp-door-gap" x1="${x1.toFixed(2)}" y1="${y1.toFixed(2)}" x2="${x2.toFixed(2)}" y2="${y2.toFixed(2)}" stroke-width="0.62" />`
          + `<line class="wp-threshold" x1="${x1.toFixed(2)}" y1="${y1.toFixed(2)}" x2="${x2.toFixed(2)}" y2="${y2.toFixed(2)}" />`;
   };
-  rooms.forEach((r, i) => { if (i < rooms.length - 1) svg += doorAt(r.exit, r.dir); });
-
-  // Faint dotted route so turn order stays readable at a glance.
-  const routePts = [rooms[0].entry, ...rooms.map((r) => r.exit)]
-    .map((p) => `${p.x.toFixed(2)},${p.y.toFixed(2)}`).join(' ');
-  svg += `<polyline class="wp-route" points="${escapeHtml(routePts)}" />`;
+  rooms.forEach((r) => { if (r.door) svg += doorGap(r.door, r.door.horizontal); });
 
   // Lettering has to fit inside its own room. A fixed size overflows the
   // walls the moment a small room draws a long name ("BATHROOM" in an 8ft
@@ -1864,11 +1939,18 @@ function renderWalkMap() {
     const cx = r.x + r.w / 2, cy = r.y + r.h / 2;
     const name = (r.node.room || `Room ${r.index + 1}`).toUpperCase();
     const dimTxt = `${ftInLabel(r.w)}\u00D7${ftInLabel(r.h)}`;
-    const nameFs = Math.min(fs, (r.w - 1.6) / Math.max(1, name.length * CHAR_W), (r.h - 1.0) / 2.7);
+    // A corridor is long and narrow, so lettering it across the width shrinks
+    // the text to nothing. Turn the label to run along the hall instead, the
+    // way a drafter letters a corridor.
+    const vertical = r.h > r.w * 1.5;
+    const along = vertical ? r.h : r.w;
+    const across = vertical ? r.w : r.h;
+    const nameFs = Math.min(fs, (along - 1.6) / Math.max(1, name.length * CHAR_W), (across - 0.7) / (vertical ? 1.5 : 2.7));
     if (nameFs < 0.5) return; // genuinely too small to letter legibly
-    const dimFs = Math.min(nameFs * 0.74, (r.w - 1.6) / Math.max(1, dimTxt.length * CHAR_W));
-    svg += `<text class="wp-room-name" x="${cx.toFixed(2)}" y="${(cy - nameFs * 0.1).toFixed(2)}" font-size="${nameFs.toFixed(2)}">${escapeHtml(name)}</text>`;
-    if (dimFs > 0.42) {
+    const dimFs = Math.min(nameFs * 0.74, (along - 1.6) / Math.max(1, dimTxt.length * CHAR_W));
+    const rot = vertical ? ` transform="rotate(-90 ${cx.toFixed(2)} ${cy.toFixed(2)})"` : '';
+    svg += `<text class="wp-room-name" x="${cx.toFixed(2)}" y="${(cy - nameFs * 0.1).toFixed(2)}" font-size="${nameFs.toFixed(2)}"${rot}>${escapeHtml(name)}</text>`;
+    if (dimFs > 0.42 && !vertical) {
       svg += `<text class="wp-room-dim" x="${cx.toFixed(2)}" y="${(cy + nameFs * 1.02).toFixed(2)}" font-size="${dimFs.toFixed(2)}">${escapeHtml(dimTxt)}</text>`;
     }
     const seqFs = Math.min(fs * 0.62, r.h * 0.22, r.w * 0.22);
@@ -1877,10 +1959,10 @@ function renderWalkMap() {
     }
   });
 
-  // Front door: fixed origin, entry arrow pointing into the house.
-  const s0 = rooms[0], d0 = s0.dir;
-  const ax = s0.entry.x, ay = s0.entry.y;
-  svg += doorAt(s0.entry, d0);
+  // Front door: fixed origin at the foot of the hall, arrow pointing in.
+  const s0 = rooms[0], d0 = { x: 0, y: -1 };
+  const ax = s0.x + s0.w / 2, ay = s0.y + s0.h;
+  svg += doorGap({ x: ax, y: ay }, true);
   svg += `<line class="wp-entry-arrow" x1="${(ax - d0.x * 4).toFixed(2)}" y1="${(ay - d0.y * 4).toFixed(2)}" x2="${(ax + d0.x * 0.4).toFixed(2)}" y2="${(ay + d0.y * 0.4).toFixed(2)}" marker-end="url(#wpArrow)" />`;
   svg += `<text class="wp-door-label" x="${(ax - d0.x * 5.6).toFixed(2)}" y="${(ay - d0.y * 5.6 + fs * 0.9).toFixed(2)}" font-size="${(fs * 0.72).toFixed(2)}">FRONT DOOR</text>`;
 
@@ -2116,10 +2198,10 @@ function addGalleryPhoto(dataUrl, mode) {
   renderFloorPlan();
   suggestRoomFromPhoto(dataUrl, div, entry);
 
-  // Nothing gets quietly filed under "Unassigned" anymore — if no room is
-  // set, ask. Short delay gives the on-device classifier a chance to land a
-  // guess first so the dropdown opens pre-filled.
-  if (!currentRoom) {
+  // During a walkthrough the New Room button owns the prompting, so a photo
+  // can't raise a second dropdown for a room that's already named. Outside a
+  // walkthrough, an untagged photo still asks rather than filing as Unassigned.
+  if (!currentRoom && !walkActive) {
     setTimeout(() => { if (!currentRoom) showRoomPrompt({ reason: 'photo', guess: entry.aiGuess }); }, 1400);
   }
 
