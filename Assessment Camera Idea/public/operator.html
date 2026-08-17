@@ -481,12 +481,24 @@
     color:var(--text-3); font-weight:700; margin-top:2px;
   }
 
-  /* ---------- Walkthrough map ---------- */
-  #walkMapSvg polyline.walk-path { fill:none; stroke:var(--accent); stroke-width:2.5; stroke-linejoin:round; stroke-linecap:round; }
-  #walkMapSvg polyline.walk-path-live { fill:none; stroke:var(--accent); stroke-width:2; stroke-dasharray:5 4; opacity:.55; }
-  #walkMapSvg circle.walk-node { fill:var(--panel); stroke:var(--accent-2); stroke-width:2; }
-  #walkMapSvg circle.walk-node.walk-start { fill:var(--ok); stroke:var(--ok); }
-  #walkMapSvg text.walk-node-label { fill:var(--text-2); font-size:10px; font-family:var(--sans); }
+  /* ---------- Walkthrough floor plan ----------
+     Drawn in real-world units: one SVG user unit == one foot, so wall
+     thicknesses and lettering are specified the way a drafter would. */
+  #walkMapSvg { background:#07090c; border-radius:var(--r-sm); display:block; }
+  #walkMapSvg .wp-bg { fill:#07090c; }
+  #walkMapSvg .wp-room { fill:#111721; stroke:#9fb0c9; stroke-width:.5; stroke-linejoin:miter; }
+  #walkMapSvg .wp-room.guessed { fill:#0e131a; stroke:#4f5a6a; stroke-dasharray:1.1 .8; }
+  #walkMapSvg .wp-room-name { fill:#eef1f5; font-weight:700; text-anchor:middle; letter-spacing:.05em; font-family:var(--sans); }
+  #walkMapSvg .wp-room-dim { fill:#8fb0f2; text-anchor:middle; font-family:var(--sans); font-weight:600; }
+  #walkMapSvg .wp-seq { fill:#6a7280; text-anchor:middle; font-family:var(--sans); font-weight:700; }
+  #walkMapSvg .wp-door-gap { stroke:#07090c; stroke-linecap:butt; }
+  #walkMapSvg .wp-threshold { stroke:#2f6feb; stroke-width:.16; }
+  #walkMapSvg .wp-route { fill:none; stroke:#2f6feb; stroke-width:.16; stroke-dasharray:.8 .7; opacity:.75; }
+  #walkMapSvg .wp-entry-arrow { stroke:#d1493f; stroke-width:.4; }
+  #walkMapSvg .wp-door-label { fill:#d1493f; text-anchor:middle; font-weight:700; letter-spacing:.12em; font-family:var(--sans); }
+  #walkMapSvg .wp-dim { stroke:#525d6d; stroke-width:.11; }
+  #walkMapSvg .wp-dim-text { fill:#98a0ac; text-anchor:middle; font-family:var(--sans); font-weight:600; }
+  #walkMapSvg .wp-live { fill:#2fa36b; stroke:#07090c; stroke-width:.18; }
   .walk-legend-row {
     display:flex; gap:9px; align-items:center; background:var(--panel-2);
     border:1px solid var(--line-soft); border-radius:var(--r-sm); padding:7px 8px; margin-bottom:6px;
@@ -676,10 +688,10 @@
 
     <div class="tab-panel" id="tab-floorplan" style="display:none;">
       <div class="section-title" style="margin-top:0;">Walkthrough Map</div>
-      <p class="hint" id="walkMapHint">Have the homeowner tap "Start Walkthrough" at the front door on their screen — turns and rooms are then logged automatically as they walk, using their phone's compass and step count. Positions are an estimate (this kind of tracking drifts over a full house), so treat this as a rough sketch of the route and turn order, not a precise blueprint. Room names are AI guesses from each waypoint's photo — correct any of them below.</p>
+      <p class="hint" id="walkMapHint">Have the homeowner tap "Start Walkthrough" at the front door — the plan then draws itself room by room as they walk, using their phone's compass and step count. The front door is always the fixed starting point at the bottom. Legs are snapped to right angles because a phone compass is far too noisy to trust the exact bearing, and houses are square anyway. Rooms sized from your "Width"/"Wall Length" tagged measurements are drawn with solid walls; anything we had to infer from stride count alone is drawn dashed. Treat it as a working sketch of layout and turn order, not a surveyed blueprint.</p>
       <div id="walkMapWrap" style="background:var(--panel-2);border:1px solid var(--line-soft);border-radius:var(--r-md);padding:11px;margin-bottom:11px;display:none;">
-        <svg id="walkMapSvg" width="100%" height="240" style="display:block;"></svg>
-        <button class="secondary" id="downloadWalkMapBtn" style="width:100%;margin-top:9px;">Download Map Image</button>
+        <svg id="walkMapSvg" width="100%" height="360" style="display:block;"></svg>
+        <button class="secondary" id="downloadWalkMapBtn" style="width:100%;margin-top:9px;">Download Floor Plan</button>
       </div>
       <div id="walkLegend"></div>
       <div id="walkMapEmpty" class="hint" style="margin:0 0 18px;">No walkthrough recorded yet.</div>
@@ -1584,38 +1596,235 @@ function endWalkMap() {
   renderWalkMap();
 }
 
-function renderWalkMap() {
-  if (!walkPoints.length) return;
-  const tip = walkActive ? walkCurrentTip() : null;
-  const allPts = tip ? [...walkPoints, tip] : walkPoints;
-  const xs = allPts.map((p) => p.x), ys = allPts.map((p) => p.y);
-  const pad = 30;
-  const minX = Math.min(...xs, 0) - pad, maxX = Math.max(...xs, 0) + pad;
-  const minY = Math.min(...ys, 0) - pad, maxY = Math.max(...ys, 0) + pad;
-  const w = Math.max(maxX - minX, 120), h = Math.max(maxY - minY, 120);
-  walkMapSvg.setAttribute('viewBox', `${minX} ${minY} ${w} ${h}`);
+// ---------- Walkthrough floor plan ----------
+// The earlier version drew the walk as a bare polyline with dots on it. This
+// renders what the assessor actually wants to hand a customer: a plan view
+// where the front door is a fixed origin at the bottom and each waypoint
+// becomes a rectangular room laid out along the route, growing room by room
+// as they walk.
+//
+// Two deliberate honesty constraints are baked into the drawing:
+//   1. Legs snap to right angles. A phone magnetometer indoors is wrong by
+//      tens of degrees near any steel or wiring, so drawing the raw bearing
+//      produces a skewed mess that looks authoritative and isn't. Real houses
+//      are orthogonal, so snapping is both prettier and closer to the truth.
+//   2. Any room we had to infer the size of is drawn dashed. Solid walls mean
+//      the number came from a real tagged measurement.
+const WALK_DEFAULT_ROOM_FT = 11;
+const WALK_MIN_ROOM_FT = 7;
 
-  const frozenPts = walkPoints.map((p) => `${p.x},${p.y}`).join(' ');
-  let svg = `<polyline class="walk-path" points="${escapeHtml(frozenPts)}" />`;
-  if (tip) {
-    const last = walkPoints[walkPoints.length - 1];
-    svg += `<polyline class="walk-path-live" points="${escapeHtml(last.x + ',' + last.y + ' ' + tip.x + ',' + tip.y)}" />`;
-  }
-  walkNodes.forEach((node, i) => {
-    const p = walkPoints[i];
-    if (!p) return;
-    const isStart = i === 0;
-    svg += `<circle class="walk-node${isStart ? ' walk-start' : ''}" cx="${p.x}" cy="${p.y}" r="7" />`;
-    const labelText = node.room ? `${i + 1}. ${node.room}` : String(i + 1);
-    svg += `<text class="walk-node-label" x="${p.x + 10}" y="${p.y + 4}">${escapeHtml(labelText)}</text>`;
+function ftInLabel(ft) {
+  const whole = Math.floor(ft);
+  const inch = Math.round((ft - whole) * 12);
+  return inch === 12 ? `${whole + 1}'0"` : `${whole}'${inch}"`;
+}
+
+// Pull a room's real footprint out of the measurement log, if the assessor
+// tagged anything as Width / Wall Length while they were in there.
+function walkRoomDimsFt(roomName) {
+  if (!roomName) return null;
+  const dims = [];
+  measurementLog.forEach((m) => {
+    if ((m.room || '') === roomName && FOOTPRINT_TAGS.includes(m.userLabel) && m.distanceMeters) {
+      dims.push(metersToFeet(m.distanceMeters));
+    }
   });
-  if (tip) {
-    svg += `<circle class="walk-node" cx="${tip.x}" cy="${tip.y}" r="5" style="opacity:.6;" />`;
+  if (!dims.length) return null;
+  dims.sort((a, b) => b - a);
+  return { long: dims[0], short: dims[1] || dims[0] };
+}
+
+function walkSnapDir(dx, dy) {
+  if (Math.abs(dx) >= Math.abs(dy)) return { x: Math.sign(dx) || 1, y: 0 };
+  return { x: 0, y: Math.sign(dy) || -1 };
+}
+
+// Turn the recorded waypoints into laid-out rectangles, in feet, with the
+// front door pinned at (0,0) and the first leg heading "up" into the house.
+// Corner clearance handles a 90° turn, but people double back constantly —
+// into a bedroom and straight out again — which lands the next room right on
+// top of the one they just left. Slide any room that still collides sideways
+// (perpendicular to travel, whichever side is closer) until it's clear, which
+// is also what the real house does: you come out of one room and the next one
+// is beside it, not through it.
+function walkPushClear(r, dir, placed) {
+  const perp = { x: -dir.y, y: dir.x };
+  const hits = (a) => placed.some((p) =>
+    Math.min(a.x + a.w, p.x + p.w) - Math.max(a.x, p.x) > 0.05 &&
+    Math.min(a.y + a.h, p.y + p.h) - Math.max(a.y, p.y) > 0.05);
+  if (!hits(r)) return;
+  for (let step = 1; step <= 60; step++) {
+    for (const sign of [1, -1]) {
+      const dx = perp.x * sign * step, dy = perp.y * sign * step;
+      const trial = { x: r.x + dx, y: r.y + dy, w: r.w, h: r.h };
+      if (!hits(trial)) {
+        r.x = trial.x; r.y = trial.y;
+        r.entry.x += dx; r.entry.y += dy;
+        r.exit.x += dx; r.exit.y += dy;
+        return;
+      }
+    }
   }
+}
+
+function buildWalkPlan() {
+  if (!walkNodes.length) return [];
+  const tip = walkActive ? walkCurrentTip() : null;
+  const pts = tip ? [...walkPoints, tip] : walkPoints.slice();
+  const rooms = [];
+  let cursor = { x: 0, y: 0 };
+  let dir = { x: 0, y: -1 };
+
+  walkNodes.forEach((node, i) => {
+    const a = pts[i], b = pts[i + 1];
+    const prevDir = { ...dir };
+    if (a && b) {
+      const dx = b.x - a.x, dy = b.y - a.y;
+      if (Math.hypot(dx, dy) > 1) dir = walkSnapDir(dx, dy);
+    }
+
+    // A tagged measurement always beats a stride count, so when the assessor
+    // actually measured the room we draw those numbers and call it solid.
+    // Otherwise we fall back to how far they walked and mark it estimated.
+    const dims = walkRoomDimsFt(node.room);
+    const isLast = i === walkNodes.length - 1;
+    let lenFt, widthFt, guessed;
+    if (dims) {
+      lenFt = dims.long; widthFt = dims.short; guessed = false;
+    } else {
+      let leg = typeof node.legToNextFt === 'number' ? node.legToNextFt : null;
+      if (!leg && isLast && walkActive) leg = walkCurrentLegFt;
+      lenFt = Math.max(leg || WALK_DEFAULT_ROOM_FT, WALK_MIN_ROOM_FT);
+      widthFt = WALK_DEFAULT_ROOM_FT;
+      guessed = true;
+    }
+
+    // Turning a corner drops the new room straddling the shared corner
+    // point, on top of the one we just left. Step past the previous room's
+    // face first — this keeps the walked leg length intact.
+    const prev = rooms[rooms.length - 1];
+    if (prev && (dir.x !== prevDir.x || dir.y !== prevDir.y)) {
+      const clear = dir.x !== 0 ? prev.w / 2 : prev.h / 2;
+      cursor = { x: cursor.x + dir.x * clear, y: cursor.y + dir.y * clear };
+    }
+
+    const along = { x: dir.x * lenFt, y: dir.y * lenFt };
+    const cx = cursor.x + along.x / 2, cy = cursor.y + along.y / 2;
+    const w = Math.abs(along.x) || widthFt;
+    const h = Math.abs(along.y) || widthFt;
+
+    const room = {
+      node, index: i, dir: { ...dir },
+      x: cx - w / 2, y: cy - h / 2, w, h,
+      guessed,
+      entry: { ...cursor },
+      exit: { x: cursor.x + along.x, y: cursor.y + along.y },
+    };
+    walkPushClear(room, dir, rooms);
+    rooms.push(room);
+    cursor = { ...room.exit };
+  });
+  return rooms;
+}
+
+function renderWalkMap() {
+  const rooms = buildWalkPlan();
+  if (!rooms.length) { walkMapSvg.innerHTML = ''; renderWalkLegend(); return; }
+
+  let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+  rooms.forEach((r) => {
+    minX = Math.min(minX, r.x); minY = Math.min(minY, r.y);
+    maxX = Math.max(maxX, r.x + r.w); maxY = Math.max(maxY, r.y + r.h);
+  });
+  const planW = maxX - minX, planH = maxY - minY;
+  const pad = Math.max(8, Math.max(planW, planH) * 0.18);
+  const vx = minX - pad, vy = minY - pad, vw = planW + pad * 2, vh = planH + pad * 2;
+  walkMapSvg.setAttribute('viewBox', `${vx.toFixed(2)} ${vy.toFixed(2)} ${vw.toFixed(2)} ${vh.toFixed(2)}`);
+  walkMapSvg.setAttribute('preserveAspectRatio', 'xMidYMid meet');
+
+  // Lettering scales with the plan so it stays legible whether the walk
+  // covered three rooms or thirty.
+  const fs = Math.max(1.1, Math.min(2.2, Math.max(vw, vh) / 26));
+
+  let svg = `<defs>
+    <pattern id="wpGrid" width="2" height="2" patternUnits="userSpaceOnUse">
+      <path d="M2 0 L0 0 0 2" fill="none" stroke="#161c25" stroke-width="0.05" />
+    </pattern>
+    <marker id="wpArrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="3.2" markerHeight="3.2" orient="auto-start-reverse">
+      <path d="M0 0 L10 5 L0 10 z" fill="#d1493f" />
+    </marker>
+  </defs>
+  <rect class="wp-bg" x="${vx}" y="${vy}" width="${vw}" height="${vh}" />
+  <rect x="${vx}" y="${vy}" width="${vw}" height="${vh}" fill="url(#wpGrid)" />`;
+
+  // Walls first, then doorway gaps punched through them, then lettering.
+  rooms.forEach((r) => {
+    svg += `<rect class="wp-room${r.guessed ? ' guessed' : ''}" x="${r.x.toFixed(2)}" y="${r.y.toFixed(2)}" width="${r.w.toFixed(2)}" height="${r.h.toFixed(2)}" />`;
+  });
+
+  const DOOR_FT = 3;
+  const doorAt = (pt, dir) => {
+    const perp = { x: -dir.y, y: dir.x };
+    const x1 = pt.x - perp.x * DOOR_FT / 2, y1 = pt.y - perp.y * DOOR_FT / 2;
+    const x2 = pt.x + perp.x * DOOR_FT / 2, y2 = pt.y + perp.y * DOOR_FT / 2;
+    return `<line class="wp-door-gap" x1="${x1.toFixed(2)}" y1="${y1.toFixed(2)}" x2="${x2.toFixed(2)}" y2="${y2.toFixed(2)}" stroke-width="0.62" />`
+         + `<line class="wp-threshold" x1="${x1.toFixed(2)}" y1="${y1.toFixed(2)}" x2="${x2.toFixed(2)}" y2="${y2.toFixed(2)}" />`;
+  };
+  rooms.forEach((r, i) => { if (i < rooms.length - 1) svg += doorAt(r.exit, r.dir); });
+
+  // Faint dotted route so turn order stays readable at a glance.
+  const routePts = [rooms[0].entry, ...rooms.map((r) => r.exit)]
+    .map((p) => `${p.x.toFixed(2)},${p.y.toFixed(2)}`).join(' ');
+  svg += `<polyline class="wp-route" points="${escapeHtml(routePts)}" />`;
+
+  // Lettering has to fit inside its own room. A fixed size overflows the
+  // walls the moment a small room draws a long name ("BATHROOM" in an 8ft
+  // box), so cap each label against both the room's width for the string
+  // length and its height for the two stacked lines.
+  const CHAR_W = 0.68; // advance width per char as a fraction of em, measured
+                       // generously: these are bold + letter-spaced, and a
+                       // label touching the wall reads as if it belongs to
+                       // the room next door.
+  rooms.forEach((r) => {
+    const cx = r.x + r.w / 2, cy = r.y + r.h / 2;
+    const name = (r.node.room || `Room ${r.index + 1}`).toUpperCase();
+    const dimTxt = `${ftInLabel(r.w)}\u00D7${ftInLabel(r.h)}`;
+    const nameFs = Math.min(fs, (r.w - 1.6) / Math.max(1, name.length * CHAR_W), (r.h - 1.0) / 2.7);
+    if (nameFs < 0.5) return; // genuinely too small to letter legibly
+    const dimFs = Math.min(nameFs * 0.74, (r.w - 1.6) / Math.max(1, dimTxt.length * CHAR_W));
+    svg += `<text class="wp-room-name" x="${cx.toFixed(2)}" y="${(cy - nameFs * 0.1).toFixed(2)}" font-size="${nameFs.toFixed(2)}">${escapeHtml(name)}</text>`;
+    if (dimFs > 0.42) {
+      svg += `<text class="wp-room-dim" x="${cx.toFixed(2)}" y="${(cy + nameFs * 1.02).toFixed(2)}" font-size="${dimFs.toFixed(2)}">${escapeHtml(dimTxt)}</text>`;
+    }
+    const seqFs = Math.min(fs * 0.62, r.h * 0.22, r.w * 0.22);
+    if (seqFs > 0.4) {
+      svg += `<text class="wp-seq" x="${(r.x + seqFs * 1.1).toFixed(2)}" y="${(r.y + seqFs * 1.5).toFixed(2)}" font-size="${seqFs.toFixed(2)}">${r.index + 1}</text>`;
+    }
+  });
+
+  // Front door: fixed origin, entry arrow pointing into the house.
+  const s0 = rooms[0], d0 = s0.dir;
+  const ax = s0.entry.x, ay = s0.entry.y;
+  svg += doorAt(s0.entry, d0);
+  svg += `<line class="wp-entry-arrow" x1="${(ax - d0.x * 4).toFixed(2)}" y1="${(ay - d0.y * 4).toFixed(2)}" x2="${(ax + d0.x * 0.4).toFixed(2)}" y2="${(ay + d0.y * 0.4).toFixed(2)}" marker-end="url(#wpArrow)" />`;
+  svg += `<text class="wp-door-label" x="${(ax - d0.x * 5.6).toFixed(2)}" y="${(ay - d0.y * 5.6 + fs * 0.9).toFixed(2)}" font-size="${(fs * 0.72).toFixed(2)}">FRONT DOOR</text>`;
+
+  // Overall dimension lines, the way a plan sheet carries them.
+  const dimY = maxY + pad * 0.45, dimX = minX - pad * 0.45;
+  svg += `<line class="wp-dim" x1="${minX.toFixed(2)}" y1="${dimY.toFixed(2)}" x2="${maxX.toFixed(2)}" y2="${dimY.toFixed(2)}" />`;
+  svg += `<text class="wp-dim-text" x="${((minX + maxX) / 2).toFixed(2)}" y="${(dimY - fs * 0.3).toFixed(2)}" font-size="${(fs * 0.7).toFixed(2)}">${ftInLabel(planW)}</text>`;
+  svg += `<line class="wp-dim" x1="${dimX.toFixed(2)}" y1="${minY.toFixed(2)}" x2="${dimX.toFixed(2)}" y2="${maxY.toFixed(2)}" />`;
+  const midY = (minY + maxY) / 2;
+  svg += `<text class="wp-dim-text" x="${(dimX - fs * 0.3).toFixed(2)}" y="${midY.toFixed(2)}" font-size="${(fs * 0.7).toFixed(2)}" transform="rotate(-90 ${(dimX - fs * 0.3).toFixed(2)} ${midY.toFixed(2)})">${ftInLabel(planH)}</text>`;
+
+  if (walkActive) {
+    const last = rooms[rooms.length - 1];
+    svg += `<circle class="wp-live" cx="${last.exit.x.toFixed(2)}" cy="${last.exit.y.toFixed(2)}" r="${(fs * 0.4).toFixed(2)}" />`;
+  }
+
   walkMapSvg.innerHTML = svg;
   renderWalkLegend();
 }
-
 function renderWalkLegend() {
   walkLegend.innerHTML = '';
   walkNodes.forEach((node, i) => {
@@ -1659,28 +1868,48 @@ function renderWalkLegend() {
 }
 
 downloadWalkMapBtn.addEventListener('click', () => {
-  const svgData = new XMLSerializer().serializeToString(walkMapSvg);
-  const svgBlob = new Blob([svgData], { type: 'image/svg+xml;charset=utf-8' });
-  const url = URL.createObjectURL(svgBlob);
+  // The plan's viewBox is measured in feet now, so scaling the export off
+  // viewBox units directly would produce a ~40px-wide image. Size it to a
+  // fixed print-friendly width instead, and inline the computed styles the
+  // SVG relies on, since a serialized SVG loaded via <img> can't reach the
+  // page's stylesheet.
+  const vb = walkMapSvg.viewBox.baseVal;
+  if (!vb || !vb.width) return;
+  const TARGET_W = 1800;
+  const outW = TARGET_W;
+  const outH = Math.round((vb.height / vb.width) * TARGET_W);
+
+  const clone = walkMapSvg.cloneNode(true);
+  clone.setAttribute('xmlns', 'http://www.w3.org/2000/svg');
+  clone.setAttribute('width', outW);
+  clone.setAttribute('height', outH);
+  const sheet = document.createElement('style');
+  sheet.textContent = Array.from(document.styleSheets)
+    .flatMap((ss) => { try { return Array.from(ss.cssRules); } catch (e) { return []; } })
+    .filter((r) => r.selectorText && r.selectorText.includes('#walkMapSvg'))
+    .map((r) => r.cssText.replace(/#walkMapSvg\s*/g, ''))
+    .join('\n');
+  clone.insertBefore(sheet, clone.firstChild);
+
+  const svgData = new XMLSerializer().serializeToString(clone);
+  const url = URL.createObjectURL(new Blob([svgData], { type: 'image/svg+xml;charset=utf-8' }));
   const img = new Image();
   img.onload = () => {
-    const scale = 2;
-    const vb = walkMapSvg.viewBox.baseVal;
     const c = document.createElement('canvas');
-    c.width = (vb.width || img.width) * scale;
-    c.height = (vb.height || img.height) * scale;
+    c.width = outW; c.height = outH;
     const cx = c.getContext('2d');
-    cx.fillStyle = '#0d0e11';
+    cx.fillStyle = '#07090c';
     cx.fillRect(0, 0, c.width, c.height);
     cx.drawImage(img, 0, 0, c.width, c.height);
     URL.revokeObjectURL(url);
     const a = document.createElement('a');
     a.href = c.toDataURL('image/png');
-    a.download = 'walkthrough-map.png';
+    a.download = 'floor-plan.png';
     document.body.appendChild(a);
     a.click();
     a.remove();
   };
+  img.onerror = () => { URL.revokeObjectURL(url); console.warn('Floor plan export failed'); };
   img.src = url;
 });
 
