@@ -1183,6 +1183,10 @@ setInterval(() => {
 
 async function ensurePC() {
   if (pc) return;
+  // Wait for the short-lived relay credentials before building the connection —
+  // creating it with STUN-only servers would lock the call out of the relay for
+  // its whole lifetime, which is exactly the cross-network case that needs it.
+  try { await window.HUD_ICE_READY; } catch (e) {}
   pc = new RTCPeerConnection({ iceServers: window.HUD_ICE_SERVERS });
   if (localStream) {
     localStream.getTracks().forEach((t) => pc.addTrack(t, localStream));
