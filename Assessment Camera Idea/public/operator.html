@@ -1029,10 +1029,10 @@ function connectWS(isRetry) {
       // to negotiate (your camera track if it's on, or a receive-only slot
       // if it's not), so onnegotiationneeded fires the actual offer below.
       await ensurePC();
+      attachRemoteTracks();
       sendAssessorName();
     } else if (msg.type === 'peer-left' && msg.role === 'homeowner') {
       setStatus('Homeowner disconnected', false);
-      remoteVideo.srcObject = null;
       setWalkControlState('nopeer', 'Homeowner disconnected.');
     } else if (msg.type === 'answer') {
       // A stale answer can arrive after we've already rolled back our own
@@ -1146,6 +1146,37 @@ function scheduleIceRecovery() {
   }, delay);
 }
 
+// The video element and the media path are two different things, and they
+// used to fall out of sync: a brief drop fires peer-left, which cleared
+// srcObject, but on reconnect ensurePC() sees a live peer connection and
+// returns early — so ontrack never fires again and the element stays empty
+// forever. Bytes keep arriving and decoding; the assessor just sees black.
+// Rebuild the element's stream from whatever the connection is actually
+// receiving, rather than relying on a one-shot event.
+function attachRemoteTracks() {
+  if (!pc) return false;
+  const tracks = pc.getReceivers().map((r) => r.track).filter((t) => t && t.readyState === 'live');
+  if (!tracks.length) return false;
+  const cur = remoteVideo.srcObject;
+  const same = cur && cur.getTracks().length === tracks.length &&
+    tracks.every((t) => cur.getTracks().includes(t));
+  if (!same) {
+    remoteVideo.srcObject = new MediaStream(tracks);
+    remoteVideo.play().catch(() => {});
+  }
+  if (pc.connectionState === 'connected') setStatus('Live', true);
+  return true;
+}
+
+// Safety net: if the connection is healthy but the picture isn't showing,
+// put it back. Cheap, and it self-heals the case above no matter how it arose.
+setInterval(() => {
+  if (!pc || pc.connectionState !== 'connected') return;
+  const v = remoteVideo;
+  const missing = !v.srcObject || v.srcObject.getTracks().every((t) => t.readyState !== 'live');
+  if (missing) attachRemoteTracks();
+}, 3000);
+
 async function ensurePC() {
   if (pc) return;
   pc = new RTCPeerConnection({ iceServers: window.HUD_ICE_SERVERS });
@@ -1162,10 +1193,7 @@ async function ensurePC() {
   pc.onicecandidate = (e) => {
     if (e.candidate) ws.send(JSON.stringify({ type: 'ice-candidate', candidate: e.candidate }));
   };
-  pc.ontrack = (e) => {
-    remoteVideo.srcObject = e.streams[0];
-    setStatus('Live', true);
-  };
+  pc.ontrack = () => { attachRemoteTracks(); };
   pc.onconnectionstatechange = () => {
     if (pc.connectionState === 'connected') { setStatus('Live', true); iceRetry = 0; }
     if (['disconnected', 'failed'].includes(pc.connectionState)) {
