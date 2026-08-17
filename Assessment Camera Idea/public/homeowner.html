@@ -215,7 +215,16 @@ resizeCanvases();
 // ---------- Room / signaling ----------
 const roomId = location.pathname.split('/').pop();
 const wsProto = location.protocol === 'https:' ? 'wss' : 'ws';
-const ws = new WebSocket(`${wsProto}://${location.host}`);
+// A phone drops this socket every time the screen locks or the browser goes
+// to the background — and as a `const` with no close handler, the session was
+// simply dead from then on. Reconnect with backoff and re-join the room.
+let ws = null;
+let wsRetry = 0;
+let wsClosedByUs = false;
+function connectWS() {
+  ws = new WebSocket(`${wsProto}://${location.host}`);
+  wireWs(ws);
+}
 let pc = null;
 let localStream = null;
 let currentFacing = 'environment';
@@ -233,16 +242,33 @@ let makingOffer = false;
 // the message, so route every outgoing message through here: send now if
 // open, otherwise queue and flush once the socket opens.
 const wsQueue = [];
+function wireWs(sock) {
+  sock.addEventListener('open', onWsOpen);
+  sock.addEventListener('message', onWsMessage);
+  sock.addEventListener('close', () => {
+    if (wsClosedByUs) return;
+    setStatus('Reconnecting…', false);
+    const delay = Math.min(1000 * Math.pow(2, wsRetry++), 10000);
+    setTimeout(connectWS, delay);
+  });
+  sock.addEventListener('error', () => { try { sock.close(); } catch (e) {} });
+}
+
 function wsSend(msg) {
-  if (ws.readyState === WebSocket.OPEN) {
+  if (ws && ws.readyState === WebSocket.OPEN) {
     ws.send(JSON.stringify(msg));
   } else {
     wsQueue.push(msg);
   }
 }
-ws.addEventListener('open', () => {
+function onWsOpen() {
+  wsRetry = 0;
+  // Re-announce on every (re)connect, not just the first.
+  ws.send(JSON.stringify({ type: 'join', roomId, role: 'homeowner' }));
   while (wsQueue.length) ws.send(JSON.stringify(wsQueue.shift()));
-});
+  trySendMood();
+  setStatus('Waiting for assessor…', false);
+}
 
 function setStatus(text, live) {
   statusText.textContent = text;
@@ -324,7 +350,6 @@ document.querySelectorAll('.mood-btn').forEach((btn) => {
     ensureWalkSensorPermission();
   });
 });
-ws.addEventListener('open', trySendMood);
 
 // ---------- Promo banner (marquee, 2 min in, 20s duration, repeats every 10 min) ----------
 let callStarted = false;
@@ -344,11 +369,7 @@ function showBannerOnce() {
   }, 10 * 1000);
 }
 
-ws.addEventListener('open', () => {
-  wsSend({ type: 'join', roomId, role: 'homeowner' });
-});
-
-ws.addEventListener('message', async (ev) => {
+async function onWsMessage(ev) {
   const msg = JSON.parse(ev.data);
   if (msg.type === 'joined') {
     setStatus('Waiting for assessor…', false);
@@ -406,7 +427,9 @@ ws.addEventListener('message', async (ev) => {
     freezeCanvas.style.display = 'none';
     measureBanner.style.display = 'none';
   }
-});
+}
+
+connectWS();
 
 async function ensurePC() {
   if (pc) return;
@@ -423,7 +446,18 @@ async function ensurePC() {
   };
   pc.onconnectionstatechange = () => {
     if (pc.connectionState === 'connected') setStatus('Live', true);
-    if (['disconnected', 'failed', 'closed'].includes(pc.connectionState)) setStatus('Connection lost', false);
+    if (['disconnected', 'failed'].includes(pc.connectionState)) {
+      // The assessor drives renegotiation, but a genuinely failed connection
+      // has to be torn down here or their fresh offer lands on a dead object.
+      setStatus('Reconnecting video…', false);
+      setTimeout(() => {
+        if (pc && ['disconnected', 'failed'].includes(pc.connectionState)) {
+          try { pc.close(); } catch (e) {}
+          pc = null;
+        }
+      }, 4000);
+    }
+    if (pc && pc.connectionState === 'closed') setStatus('Connection lost', false);
   };
   // The camera permission prompt can take a few seconds for the person to
   // tap "Allow" — often longer than it takes the operator's offer to
