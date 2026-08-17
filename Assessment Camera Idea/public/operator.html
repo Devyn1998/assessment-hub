@@ -3099,6 +3099,9 @@ document.querySelectorAll('.tab-btn').forEach((btn) => {
 });
 
 newSession();
+// Paint the empty plan box on first load too, so the front door is on screen
+// before anyone has walked anywhere — newSession() only fires on New Session.
+renderWalkMap();
 
 // ---------- Holographic EST clock (bottom-left, ticks every second) ----------
 const holoTimeEl = $('holoTime');
