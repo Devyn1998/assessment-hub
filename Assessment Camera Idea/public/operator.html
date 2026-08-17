@@ -953,13 +953,38 @@ function setStatus(text, live) {
   }
 }
 
+// This used to be a bare fetch with no error handling: if the request failed
+// (Render cold-starting, a network blip) the click did nothing at all and the
+// stale link just sat there looking valid — so you'd hand a customer a link
+// into the previous session. Now it says what it's doing and retries.
 async function newSession() {
-  const res = await fetch('/api/new-room');
-  const data = await res.json();
-  roomId = data.roomId;
-  const link = `${location.origin}/join/${roomId}`;
-  linkInput.value = link;
-  connectWS();
+  const prev = linkInput.value;
+  linkInput.value = 'Generating new link…';
+  $('newBtn').disabled = true;
+  $('copyBtn').disabled = true;
+  try {
+    let data = null;
+    for (let attempt = 1; attempt <= 3 && !data; attempt++) {
+      try {
+        const res = await fetch('/api/new-room', { cache: 'no-store' });
+        if (!res.ok) throw new Error('HTTP ' + res.status);
+        data = await res.json();
+      } catch (e) {
+        if (attempt === 3) throw e;
+        await new Promise((r) => setTimeout(r, attempt * 1200));
+      }
+    }
+    roomId = data.roomId;
+    linkInput.value = `${location.origin}/join/${roomId}`;
+    connectWS();
+  } catch (e) {
+    console.warn('Could not start a new session', e);
+    linkInput.value = prev && prev.startsWith('http') ? prev : '';
+    setStatus('Could not get a new link — check your connection and press New Session again.', false);
+  } finally {
+    $('newBtn').disabled = false;
+    $('copyBtn').disabled = false;
+  }
 }
 
 // Nothing here used to recover on its own: a dropped socket or a failed ICE
@@ -1238,6 +1263,22 @@ $('copyBtn').addEventListener('click', () => {
 });
 
 $('newBtn').addEventListener('click', () => {
+  // The DOM was being cleared but the underlying arrays weren't, so a "new"
+  // session still carried the previous job's measurements and photos into the
+  // floor plan and the exported report.
+  measurementLog.length = 0;
+  sessionPhotos.length = 0;
+  photoCounter = 0;
+  currentRoom = '';
+  roomSelect.value = '';
+  roomCustomInput.value = '';
+  roomCustomInput.style.display = 'none';
+  photoGallery.innerHTML = '';
+  photoGallery.appendChild(photoEmpty);
+  checklist.forEach((item) => { item.state = 'pending'; item.note = ''; item.auto = false; });
+  renderChecklist();
+  renderRoomMeasurements();
+  renderFloorPlan();
   log.innerHTML = '';
   log.appendChild(empty);
   walkActive = false;
