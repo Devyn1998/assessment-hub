@@ -186,9 +186,6 @@
     <div class="row">
       <button id="arBtn" style="display:none;">Enable AR (one tap)</button>
     </div>
-    <div class="row">
-      <button id="walkBtn">Start Walkthrough (Front Door)</button>
-    </div>
     <div class="row" id="camRow">
       <button id="flipBtn" class="secondary">Flip Camera</button>
     </div>
@@ -295,6 +292,23 @@ function startHomeownerSpeechRecognition() {
 const moodModal = $('moodModal');
 let pendingMood = null;
 
+let walkSensorsReady = false;
+async function ensureWalkSensorPermission() {
+  if (walkSensorsReady) return;
+  walkSensorsReady = true;
+  try {
+    if (typeof DeviceOrientationEvent !== 'undefined' && typeof DeviceOrientationEvent.requestPermission === 'function') {
+      const res = await DeviceOrientationEvent.requestPermission();
+      if (res !== 'granted') console.warn('Compass denied — turns need Mark Turn from the assessor.');
+    }
+  } catch (e) { console.warn('Compass permission request failed', e); }
+  try {
+    if (typeof DeviceMotionEvent !== 'undefined' && typeof DeviceMotionEvent.requestPermission === 'function') {
+      await DeviceMotionEvent.requestPermission();
+    }
+  } catch (e) { console.warn('Motion permission request failed', e); }
+}
+
 function trySendMood() {
   if (pendingMood) {
     wsSend({ type: 'customer-mood', mood: pendingMood.mood, emoji: pendingMood.emoji });
@@ -306,6 +320,8 @@ document.querySelectorAll('.mood-btn').forEach((btn) => {
     pendingMood = { mood: btn.dataset.mood, emoji: btn.dataset.emoji };
     trySendMood();
     moodModal.style.display = 'none';
+    // Rides on this tap so the remote-started walkthrough has sensors ready.
+    ensureWalkSensorPermission();
   });
 });
 ws.addEventListener('open', trySendMood);
@@ -372,6 +388,8 @@ ws.addEventListener('message', async (ev) => {
     if (xrSession) measureBanner.textContent = 'Reset. Point at the first wall — your assessor will drop the pin.';
   } else if (msg.type === 'remote-end-ar') {
     endAR(true);
+  } else if (msg.type === 'remote-start-walk') {
+    if (!walkActive) startWalkthrough();
   } else if (msg.type === 'remote-mark-turn') {
     forceWalkTurn();
   } else if (msg.type === 'remote-end-walk') {
@@ -603,7 +621,6 @@ function onAREnd() {
 // is tapped, everything after that (turn detection, waypoint photos, room
 // naming) runs automatically — no further taps needed on either screen.
 // The assessor's "Mark Turn" button is only a fallback for a missed turn.
-const walkBtn = $('walkBtn');
 let walkActive = false;
 let walkOrientationHandler = null;
 let walkMotionHandler = null;
@@ -689,31 +706,13 @@ async function startWalkthrough() {
   walkAccelBaseline = null;
   walkStepsThisLeg = 0;
   walkLastTurnAt = 0;
-  walkBtn.textContent = 'End Walkthrough';
-  walkBtn.classList.add('danger');
   wsSend({ type: 'walk-started' });
   captureAndSendFrame('walk');
   scheduleWalkPhoto();
 
-  // Sensor permissions requested after the fact — each wrapped separately so
-  // one failing/denying doesn't affect the other or the walkthrough itself.
-  try {
-    if (typeof DeviceOrientationEvent !== 'undefined' && typeof DeviceOrientationEvent.requestPermission === 'function') {
-      const res = await DeviceOrientationEvent.requestPermission();
-      if (res !== 'granted') {
-        console.warn('Compass permission not granted — automatic turn detection disabled, use Mark Turn instead.');
-      }
-    }
-  } catch (e) {
-    console.warn('Compass permission request failed', e);
-  }
-  try {
-    if (typeof DeviceMotionEvent !== 'undefined' && typeof DeviceMotionEvent.requestPermission === 'function') {
-      await DeviceMotionEvent.requestPermission();
-    }
-  } catch (e) {
-    console.warn('Motion permission request failed', e);
-  }
+  // Permission was already taken care of on the mood tap; this is only a
+  // backstop for the case where that never happened.
+  await ensureWalkSensorPermission();
   walkOrientationHandler = handleWalkOrientation;
   walkMotionHandler = handleWalkMotion;
   window.addEventListener('deviceorientationabsolute', walkOrientationHandler);
@@ -741,12 +740,9 @@ function endWalkthrough() {
     window.removeEventListener('deviceorientation', walkOrientationHandler);
   }
   if (walkMotionHandler) window.removeEventListener('devicemotion', walkMotionHandler);
-  walkBtn.textContent = 'Start Walkthrough (Front Door)';
-  walkBtn.classList.remove('danger');
   wsSend({ type: 'walk-ended' });
 }
 
-walkBtn.addEventListener('click', startWalkthrough);
 
 // Triggered remotely by the operator — grabs the current frame and sends
 // it over so the assessor can do the measuring taps on their own screen.
