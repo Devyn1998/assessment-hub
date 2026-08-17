@@ -1173,8 +1173,12 @@ function attachRemoteTracks() {
 setInterval(() => {
   if (!pc || pc.connectionState !== 'connected') return;
   const v = remoteVideo;
-  const missing = !v.srcObject || v.srcObject.getTracks().every((t) => t.readyState !== 'live');
-  if (missing) attachRemoteTracks();
+  const live = v.srcObject && v.srcObject.getTracks().some((t) => t.readyState === 'live');
+  // Reattach if the picture is gone, but also clear a stale "disconnected"
+  // label when the peer came back and the video never actually stopped —
+  // otherwise the header keeps saying disconnected over a working call.
+  if (!live) attachRemoteTracks();
+  else setStatus('Live', true);
 }, 3000);
 
 async function ensurePC() {
