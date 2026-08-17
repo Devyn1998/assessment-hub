@@ -235,6 +235,19 @@
   .walk-legend-meta { font-size:10px; color:#888; }
   .walk-legend-name { width:100%; padding:5px 7px; border-radius:6px; border:1px solid #2b2e36; background:#15171b; color:#eee; font-size:12px; font-family:inherit; margin-top:2px; }
   .walk-guess-tag { font-size:9.5px; color:#3ecf5f; }
+
+  /* ---- Address autocomplete dropdown ---- */
+  #addressSuggest {
+    display:none; position:absolute; left:0; right:0; top:100%; z-index:60; margin-top:4px;
+    background:#1a1c22; border:1px solid #2b2e36; border-radius:8px; overflow:hidden;
+    max-height:220px; overflow-y:auto; box-shadow:0 6px 18px rgba(0,0,0,.4);
+  }
+  #addressSuggest div { padding:8px 11px; font-size:12.5px; color:#ddd; cursor:pointer; }
+  #addressSuggest div:hover { background:#2a2d34; }
+
+  /* ---- Photo delete button ---- */
+  .photo-delete-btn { background:#3a1f1f; color:#e0a3a3; border:1px solid #4a2828; }
+  .photo-delete-btn:hover { background:#4a2626; }
 </style>
 </head>
 <body>
@@ -245,7 +258,10 @@
   </div>
   <div class="header-right">
     <input id="customerNameInput" class="header-input" placeholder="Customer name" />
-    <input id="addressInput" class="header-input wide" placeholder="Address" />
+    <div id="addressWrap" style="position:relative;">
+      <input id="addressInput" class="header-input wide" placeholder="Address" autocomplete="off" />
+      <div id="addressSuggest"></div>
+    </div>
     <button id="endAssessmentBtn">End &amp; Export</button>
     <div class="assessor-picker">
       <span>Assessor -</span>
@@ -336,8 +352,13 @@
         <button id="liveMeasureBtn" class="secondary" style="flex:1;">Measure on Live Video</button>
         <button id="capturePhotoBtn" class="secondary" style="flex:1;">Capture Photo to Measure</button>
       </div>
-      <p class="hint">"Measure on Live Video" taps points right on the feed — no photo saved. "Capture Photo to Measure" freezes a frame first if you want a saved record. Tap the 4 corners of a reference object (a door works great and is usually already in frame) to lock in true scale and correct for camera angle, then tap the two points you want to measure — you'll get a distance plus a confidence read on how much to trust it. Switching rooms above never ends this session. Every measurement recalibrates fresh from the object you tap — so it stays accurate as you move around, not just at one distance.</p>
+      <p class="hint">"Measure on Live Video" taps points right on the feed — no photo saved. "Capture Photo to Measure" freezes a frame first if you want a saved record. Either way, it first scans for a person in frame to auto-scale from (assumed height shown below, adjustable) — if found, just tap the two points you want to measure. If no one's in frame, it falls back to tapping the 4 corners of a reference object (a door works great and is usually already in frame) for a more precise, angle-corrected measurement. Switching rooms above never ends this session.</p>
       <div id="calibStatus" class="hint" style="margin:0 0 10px;"></div>
+      <div id="autoScaleRow" style="display:none; align-items:center; gap:8px; flex-wrap:wrap; background:#0d0e11; border:1px solid #262a31; border-radius:8px; padding:8px 10px; margin:0 0 10px; font-size:12px; color:#8fe3b8;">
+        <span>Assumed height:</span>
+        <input id="autoScaleHeightInput" type="number" value="66" style="width:56px; padding:5px 6px; border-radius:6px; border:1px solid #333; background:#15171b; color:#eee; font-size:12px;" /><span>in</span>
+        <button class="secondary" id="autoScaleManualBtn" style="padding:4px 9px; font-size:11px; flex:0 0 auto;">Use manual corners instead</button>
+      </div>
 
       <div id="photoWrap">
         <img id="photoImg" />
@@ -417,6 +438,9 @@
      browser tab; nothing is sent anywhere. -->
 <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.20.0/dist/tf.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/mobilenet@2.1.1/dist/mobilenet.min.js"></script>
+<!-- Same free, self-hosted setup, used to auto-detect a person in frame as a
+     quick scale reference for measuring (average height assumed, adjustable). -->
+<script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/coco-ssd@2.2.2/dist/coco-ssd.min.js"></script>
 
 <script>
 const $ = (id) => document.getElementById(id);
@@ -456,6 +480,7 @@ const photoGallery = $('photoGallery');
 const photoEmpty = $('photoEmpty');
 const customerNameInput = $('customerNameInput');
 const addressInput = $('addressInput');
+const addressSuggest = $('addressSuggest');
 const endAssessmentBtn = $('endAssessmentBtn');
 const listenBtn = $('listenBtn');
 const checklistItemsEl = $('checklistItems');
@@ -469,6 +494,9 @@ const roomMeasureEmpty = $('roomMeasureEmpty');
 const moodBox = $('moodBox');
 const moodEmoji = $('moodEmoji');
 const calibStatus = $('calibStatus');
+const autoScaleRow = $('autoScaleRow');
+const autoScaleHeightInput = $('autoScaleHeightInput');
+const autoScaleManualBtn = $('autoScaleManualBtn');
 const floorPlanGrid = $('floorPlanGrid');
 const floorPlanEmpty = $('floorPlanEmpty');
 const scaleReadout = $('scaleReadout');
@@ -492,6 +520,65 @@ function sendAssessorName() {
 assessorSelect.addEventListener('change', () => {
   currentAssessor = assessorSelect.value;
   sendAssessorName();
+});
+
+// ---------- Address autocomplete (free, no API key — Photon/OpenStreetMap) ----------
+// Photon is a free public geocoder built on OpenStreetMap data. No signup,
+// no cost, no key — just a plain fetch. It won't be quite as sharp as Google
+// on brand-new construction or very rural addresses, but it's a solid,
+// zero-setup dropdown of real matching addresses as you type.
+let addressDebounceTimer = null;
+let addressFetchController = null;
+
+function hideAddressSuggest() {
+  addressSuggest.style.display = 'none';
+  addressSuggest.innerHTML = '';
+}
+
+async function fetchAddressSuggestions(query) {
+  if (addressFetchController) addressFetchController.abort();
+  addressFetchController = new AbortController();
+  try {
+    const url = `https://photon.komoot.io/api/?q=${encodeURIComponent(query)}&limit=6&lang=en`;
+    const res = await fetch(url, { signal: addressFetchController.signal });
+    const data = await res.json();
+    return (data.features || []).map((f) => {
+      const p = f.properties || {};
+      const parts = [
+        [p.housenumber, p.street].filter(Boolean).join(' '),
+        p.city || p.town || p.village,
+        p.state,
+        p.postcode,
+        p.country,
+      ].filter(Boolean);
+      return parts.join(', ');
+    }).filter((s, i, arr) => s && arr.indexOf(s) === i);
+  } catch (e) {
+    if (e.name !== 'AbortError') console.warn('Address lookup failed', e);
+    return [];
+  }
+}
+
+addressInput.addEventListener('input', () => {
+  const q = addressInput.value.trim();
+  clearTimeout(addressDebounceTimer);
+  if (q.length < 4) { hideAddressSuggest(); return; }
+  addressDebounceTimer = setTimeout(async () => {
+    const results = await fetchAddressSuggestions(q);
+    if (!results.length) { hideAddressSuggest(); return; }
+    addressSuggest.innerHTML = results.map((r) => `<div data-value="${escapeHtml(r)}">${escapeHtml(r)}</div>`).join('');
+    addressSuggest.style.display = 'block';
+    addressSuggest.querySelectorAll('div').forEach((el) => {
+      el.addEventListener('mousedown', (e) => {
+        e.preventDefault(); // keep focus so blur doesn't hide the list before the click registers
+        addressInput.value = el.dataset.value;
+        hideAddressSuggest();
+      });
+    });
+  }, 350);
+});
+addressInput.addEventListener('blur', () => {
+  setTimeout(hideAddressSuggest, 150);
 });
 
 let ws, pc, roomId, localStream = null;
@@ -1111,7 +1198,8 @@ function renderWalkMap() {
     if (!p) return;
     const isStart = i === 0;
     svg += `<circle class="walk-node${isStart ? ' walk-start' : ''}" cx="${p.x}" cy="${p.y}" r="7" />`;
-    svg += `<text class="walk-node-label" x="${p.x + 10}" y="${p.y + 4}">${escapeHtml(String(i + 1))}</text>`;
+    const labelText = node.room ? `${i + 1}. ${node.room}` : String(i + 1);
+    svg += `<text class="walk-node-label" x="${p.x + 10}" y="${p.y + 4}">${escapeHtml(labelText)}</text>`;
   });
   if (tip) {
     svg += `<circle class="walk-node" cx="${tip.x}" cy="${tip.y}" r="5" style="opacity:.6;" />`;
@@ -1220,6 +1308,47 @@ function getMobilenetModel() {
   return mobilenetModelPromise;
 }
 
+// ---------- Auto-scale reference detection (TensorFlow.js COCO-SSD) ----------
+// COCO-SSD is a general object detector — it can't recognize "a door" (not
+// one of its 80 classes), but it reliably spots a person, and an adult's
+// height is a reasonably well-known number. This trades the precision of
+// the 4-corner homography (which corrects for camera angle) for speed: it's
+// a single bounding-box height vs. an assumed average height, so treat
+// results as a ballpark, not a precise measurement. Runs entirely in this
+// browser tab, same as the room-guessing model above.
+let cocoModelPromise = null;
+function getCocoModel() {
+  if (!cocoModelPromise) {
+    if (typeof cocoSsd === 'undefined') {
+      cocoModelPromise = Promise.reject(new Error('COCO-SSD library did not load'));
+    } else {
+      cocoModelPromise = cocoSsd.load();
+    }
+  }
+  return cocoModelPromise;
+}
+
+function naturalSizeOf(el) {
+  if (el.tagName === 'IMG') return { w: el.naturalWidth, h: el.naturalHeight };
+  if (el.tagName === 'VIDEO') return { w: el.videoWidth, h: el.videoHeight };
+  return { w: el.width, h: el.height };
+}
+
+// Detects the tallest person in `sourceEl` and returns its bounding-box
+// height rescaled into `canvasEl`'s coordinate space (the same space clicks
+// are recorded in), or null if nothing usable was found.
+async function detectPersonBBoxScaled(sourceEl, canvasEl) {
+  const nat = naturalSizeOf(sourceEl);
+  if (!nat.w || !nat.h) return null;
+  const model = await getCocoModel();
+  const predictions = await model.detect(sourceEl);
+  const people = predictions.filter((p) => p.class === 'person' && p.score > 0.55);
+  if (!people.length) return null;
+  const tallest = people.reduce((a, b) => (b.bbox[3] > a.bbox[3] ? b : a));
+  const sy = canvasEl.height / nat.h;
+  return { height: tallest.bbox[3] * sy };
+}
+
 function guessRoomFromPredictions(predictions) {
   for (const pred of predictions) {
     const className = pred.className.toLowerCase();
@@ -1256,18 +1385,46 @@ function addGalleryPhoto(dataUrl, mode) {
   const div = document.createElement('div');
   div.className = 'photo-entry';
   div.innerHTML = `
+    <div style="display:flex; justify-content:space-between; align-items:flex-start; gap:8px;">
+      <div class="photo-time" style="margin-bottom:0;">${escapeHtml(entry.room)} · ${entry.time.toLocaleTimeString()}${mode === 'measure' ? ' · Measurement photo' : ''}</div>
+      <button class="secondary photo-delete-btn" title="Delete this photo" style="flex:0 0 auto; padding:4px 9px; font-size:11px;">Delete</button>
+    </div>
     <img src="${dataUrl}" />
-    <div class="photo-time">${escapeHtml(entry.room)} · ${entry.time.toLocaleTimeString()}${mode === 'measure' ? ' · Measurement photo' : ''}</div>
     <div class="photo-measure" style="display:none;"></div>
     <textarea class="photo-desc" placeholder="Add a description…"></textarea>
   `;
   entry.measureEl = div.querySelector('.photo-measure');
+  entry.rootEl = div;
   const textarea = div.querySelector('.photo-desc');
   textarea.addEventListener('input', () => { entry.description = textarea.value; });
+  div.querySelector('.photo-delete-btn').addEventListener('click', () => deleteGalleryPhoto(entry));
   photoGallery.prepend(div);
   renderFloorPlan();
   suggestRoomFromPhoto(dataUrl, div);
+
+  // As soon as a photo tagged to a real room comes in mid-walkthrough, label
+  // the current waypoint on the live map with that room name right away —
+  // no need to wait on (or correct) the AI guess.
+  if (walkActive && walkPendingNode && entry.room && entry.room !== 'Unassigned') {
+    walkPendingNode.room = entry.room;
+    walkPendingNode.roomIsGuess = false;
+    renderWalkMap();
+  }
   return entry;
+}
+
+function deleteGalleryPhoto(entry) {
+  const idx = sessionPhotos.indexOf(entry);
+  if (idx !== -1) sessionPhotos.splice(idx, 1);
+  if (entry.rootEl && entry.rootEl.parentNode) entry.rootEl.remove();
+  if (!sessionPhotos.length && photoGallery.children.length === 0) {
+    photoGallery.appendChild(photoEmpty);
+  }
+  // Detach from whatever it was linked to so nothing points at a removed photo.
+  if (entry.measurement) entry.measurement.photoEntry = null;
+  walkNodes.forEach((node) => { if (node.photo === entry.dataUrl) node.photo = null; });
+  renderFloorPlan();
+  renderWalkMap();
 }
 
 takePhotoBtn.addEventListener('click', () => {
@@ -1767,6 +1924,34 @@ let opRefObjectLabel = '';
 let activeCanvas = null;
 let activeCtx = null;
 let liveMeasureActive = false;
+let opAutoScaleMode = false;
+let opAutoScalePxPerInch = null;
+let opAutoScaleBboxPx = null;
+let opAssumedPersonHeightIn = 66;
+
+function resetAutoScale() {
+  opAutoScaleMode = false;
+  opAutoScalePxPerInch = null;
+  opAutoScaleBboxPx = null;
+  autoScaleRow.style.display = 'none';
+}
+
+autoScaleHeightInput.addEventListener('input', () => {
+  const v = parseFloat(autoScaleHeightInput.value);
+  if (v > 0 && opAutoScaleBboxPx) {
+    opAssumedPersonHeightIn = v;
+    opAutoScalePxPerInch = opAutoScaleBboxPx / v;
+  }
+});
+
+autoScaleManualBtn.addEventListener('click', () => {
+  resetAutoScale();
+  opStage = 'calib';
+  opCalibPts = [];
+  if (activeCtx && activeCanvas) activeCtx.clearRect(0, 0, activeCanvas.width, activeCanvas.height);
+  calibStatus.textContent = calibHint(0);
+  if (activeCanvas === liveMeasureOverlay) liveMeasureBanner.textContent = calibHint(0);
+});
 
 // Grabs a still frame from a live <video> element (used to save a photo
 // alongside a "Measure on Live Video" result, since that flow doesn't
@@ -1797,19 +1982,41 @@ function calibHint(n) {
   return `Tap corner ${n + 1} of 4 (${CORNER_NAMES[n]}) of your reference object.`;
 }
 
-function beginCalibration(canvas, ctx) {
+async function beginCalibration(canvas, ctx) {
   activeCanvas = canvas;
   activeCtx = ctx;
   opCalibPts = []; opTargetPts = []; opHomography = null; opRefRealPts = null; opRefObjectLabel = '';
-  opStage = 'calib';
+  resetAutoScale();
   ctx.clearRect(0, 0, canvas.width, canvas.height);
   // Default to the interior door: it's the one reference object almost
   // always in frame no matter which room you're in, so most calibrations
-  // need zero extra taps to pick something from the list.
+  // need zero extra taps to pick something from the list — used if auto
+  // scale detection below doesn't find anything.
   opRefObjectSelect.value = 'interiorDoor';
   updateRefObjectUI();
-  calibStatus.textContent = calibHint(0);
-  if (canvas === liveMeasureOverlay) liveMeasureBanner.textContent = calibHint(0);
+  const scanMsg = 'Scanning the photo for a quick scale reference (a person in frame)…';
+  calibStatus.textContent = scanMsg;
+  if (canvas === liveMeasureOverlay) liveMeasureBanner.textContent = scanMsg;
+
+  const sourceEl = canvas === photoOverlay ? photoImg : remoteVideo;
+  const bbox = await detectPersonBBoxScaled(sourceEl, canvas).catch((e) => { console.warn('Auto-scale detection failed', e); return null; });
+  if (activeCanvas !== canvas) return; // flow moved on while we were scanning
+
+  if (bbox && bbox.height > 40) {
+    opAutoScaleMode = true;
+    opAutoScaleBboxPx = bbox.height;
+    opAutoScalePxPerInch = bbox.height / opAssumedPersonHeightIn;
+    opStage = 'target';
+    autoScaleHeightInput.value = opAssumedPersonHeightIn;
+    autoScaleRow.style.display = 'flex';
+    const msg = 'Auto-detected a person in frame as your scale reference — tap the two points you want to measure.';
+    calibStatus.textContent = msg;
+    if (canvas === liveMeasureOverlay) liveMeasureBanner.textContent = msg;
+  } else {
+    opStage = 'calib';
+    calibStatus.textContent = calibHint(0);
+    if (canvas === liveMeasureOverlay) liveMeasureBanner.textContent = calibHint(0);
+  }
 }
 
 // ---- Capture Photo to Measure (freeze-frame, saves a photo record) ----
@@ -1866,6 +2073,7 @@ function stopLiveMeasure() {
     activeCanvas = null;
     activeCtx = null;
     opHomography = null; opRefRealPts = null; opRefObjectLabel = '';
+    resetAutoScale();
   }
 }
 
@@ -1900,14 +2108,23 @@ function onMeasureCanvasClick(e) {
     opDrawPoint(x, y, '#3ecf5f');
     if (opTargetPts.length === 2) {
       opDrawLine(opTargetPts[0], opTargetPts[1], '#3ecf5f');
-      const p1 = applyHomography(opHomography, opTargetPts[0]);
-      const p2 = applyHomography(opHomography, opTargetPts[1]);
-      const inches = Math.hypot(p2.x - p1.x, p2.y - p1.y);
+      let inches, confidenceText, refLabelUsed;
+      if (opAutoScaleMode) {
+        const pxDist = Math.hypot(opTargetPts[1].x - opTargetPts[0].x, opTargetPts[1].y - opTargetPts[0].y);
+        inches = pxDist / opAutoScalePxPerInch;
+        confidenceText = `Auto-scale, assumed ${opAssumedPersonHeightIn}in person — ballpark only, no camera-angle correction`;
+        refLabelUsed = `auto-detected person (~${opAssumedPersonHeightIn}in)`;
+      } else {
+        const p1 = applyHomography(opHomography, opTargetPts[0]);
+        const p2 = applyHomography(opHomography, opTargetPts[1]);
+        inches = Math.hypot(p2.x - p1.x, p2.y - p1.y);
+        const unc = estimateMeasurementUncertainty(opCalibPts, opRefRealPts, opTargetPts, 4);
+        confidenceText = `${toleranceLabel(unc.toleranceInches)} — ${unc.confidenceLabel}`;
+        refLabelUsed = opRefObjectLabel;
+      }
       const meters = inches * 0.0254;
       const f = formatMeters(meters);
-      const unc = estimateMeasurementUncertainty(opCalibPts, opRefRealPts, opTargetPts, 4);
-      const confidenceText = `${toleranceLabel(unc.toleranceInches)} — ${unc.confidenceLabel}`;
-      const result = { mode: 'manual', distanceMeters: f.meters, label: f.label, confidenceText, refObjectLabel: opRefObjectLabel };
+      const result = { mode: 'manual', distanceMeters: f.meters, label: f.label, confidenceText, refObjectLabel: refLabelUsed };
       const entry = addMeasurement(result);
       if (canvas === photoOverlay && pendingMeasurePhoto) {
         // Still-photo flow: the photo was already saved when it was captured —
@@ -1930,6 +2147,7 @@ function onMeasureCanvasClick(e) {
       // measurement (on this photo or the next one) recalibrates from a
       // clean slate instead of reusing a stale transform.
       opCalibPts = []; opTargetPts = []; opHomography = null; opRefRealPts = null; opRefObjectLabel = '';
+      resetAutoScale();
       if (canvas === photoOverlay) {
         if (ws) ws.send(JSON.stringify({ type: 'remote-photo-done' }));
         photoCancelRow.style.display = 'none';
@@ -2014,6 +2232,7 @@ $('cancelPhotoBtn').addEventListener('click', () => {
   pendingMeasurePhoto = null;
   activeCanvas = null; activeCtx = null;
   opHomography = null; opRefRealPts = null; opRefObjectLabel = '';
+  resetAutoScale();
 });
 
 // ---------- Tab switching ----------

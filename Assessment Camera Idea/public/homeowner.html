@@ -644,33 +644,48 @@ function scheduleWalkPhoto() {
 
 async function startWalkthrough() {
   if (walkActive) { endWalkthrough(); return; }
-  try {
-    if (typeof DeviceOrientationEvent !== 'undefined' && typeof DeviceOrientationEvent.requestPermission === 'function') {
-      const res = await DeviceOrientationEvent.requestPermission();
-      if (res !== 'granted') { alert('Compass access is needed to track turns automatically.'); return; }
-    }
-    if (typeof DeviceMotionEvent !== 'undefined' && typeof DeviceMotionEvent.requestPermission === 'function') {
-      await DeviceMotionEvent.requestPermission().catch(() => {});
-    }
-  } catch (e) {
-    console.warn('Sensor permission request failed', e);
-  }
+  // Fire the start immediately, before touching sensor permissions — the
+  // operator's live map should always begin drawing the instant this is
+  // tapped. Sensor permission prompts (iOS especially) can be denied,
+  // dismissed, or fail in ways that used to abort the whole walkthrough
+  // silently; now a denial just means turns need "Mark Turn" instead of
+  // being auto-detected, it never blocks the walkthrough from starting.
   walkActive = true;
   walkSmoothedHeading = null;
   walkLegStartHeading = null;
   walkAccelBaseline = null;
   walkStepsThisLeg = 0;
   walkLastTurnAt = 0;
-  walkOrientationHandler = handleWalkOrientation;
-  walkMotionHandler = handleWalkMotion;
-  window.addEventListener('deviceorientationabsolute', walkOrientationHandler);
-  window.addEventListener('deviceorientation', walkOrientationHandler);
-  window.addEventListener('devicemotion', walkMotionHandler);
   walkBtn.textContent = 'End Walkthrough';
   walkBtn.classList.add('danger');
   wsSend({ type: 'walk-started' });
   captureAndSendFrame('walk');
   scheduleWalkPhoto();
+
+  // Sensor permissions requested after the fact — each wrapped separately so
+  // one failing/denying doesn't affect the other or the walkthrough itself.
+  try {
+    if (typeof DeviceOrientationEvent !== 'undefined' && typeof DeviceOrientationEvent.requestPermission === 'function') {
+      const res = await DeviceOrientationEvent.requestPermission();
+      if (res !== 'granted') {
+        console.warn('Compass permission not granted — automatic turn detection disabled, use Mark Turn instead.');
+      }
+    }
+  } catch (e) {
+    console.warn('Compass permission request failed', e);
+  }
+  try {
+    if (typeof DeviceMotionEvent !== 'undefined' && typeof DeviceMotionEvent.requestPermission === 'function') {
+      await DeviceMotionEvent.requestPermission();
+    }
+  } catch (e) {
+    console.warn('Motion permission request failed', e);
+  }
+  walkOrientationHandler = handleWalkOrientation;
+  walkMotionHandler = handleWalkMotion;
+  window.addEventListener('deviceorientationabsolute', walkOrientationHandler);
+  window.addEventListener('deviceorientation', walkOrientationHandler);
+  window.addEventListener('devicemotion', walkMotionHandler);
 }
 
 function forceWalkTurn() {
