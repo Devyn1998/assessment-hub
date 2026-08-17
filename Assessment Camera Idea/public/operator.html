@@ -496,6 +496,11 @@
   #walkMapSvg { background:#07090c; border-radius:var(--r-sm); display:block; }
   #walkMapSvg .wp-bg { fill:#07090c; }
   #walkMapSvg .wp-room { fill:#111721; stroke:#9fb0c9; stroke-width:.5; stroke-linejoin:miter; }
+  #walkMapSvg.pickable .wp-room { cursor:pointer; }
+  #walkMapSvg.pickable .wp-room:hover { fill:#182130; }
+  #walkMapSvg .wp-room.selected { stroke:#2f6feb; stroke-width:.85; fill:#16243c; }
+  /* Lettering and dimension lines must not swallow clicks meant for a room. */
+  #walkMapSvg text, #walkMapSvg line, #walkMapSvg polyline { pointer-events:none; }
   #walkMapSvg .wp-room.guessed { fill:#0e131a; stroke:#4f5a6a; stroke-dasharray:1.1 .8; }
   #walkMapSvg .wp-room-name { fill:#eef1f5; font-weight:700; text-anchor:middle; letter-spacing:.05em; font-family:var(--sans); }
   #walkMapSvg .wp-room-dim { fill:#8fb0f2; text-anchor:middle; font-family:var(--sans); font-weight:600; }
@@ -1159,6 +1164,7 @@ $('newBtn').addEventListener('click', () => {
   walkSegments = [];
   walkSegFtBase = 0;
   walkLastTurn = null;
+  walkSelectedIdx = null;
   walkLegend.innerHTML = '';
   newRoomBtn.disabled = true;
   setWalkControlState('nopeer', 'Waiting for the homeowner to join…');
@@ -1596,9 +1602,10 @@ function startWalkMap() {
   walkSegments = [];
   walkSegFtBase = 0;
   walkLastTurn = null;
+  walkSelectedIdx = null;
   beginRoomSegment('');            // the space just inside the front door
   newRoomBtn.disabled = false;
-  setWalkControlState('live', 'Recording — press New Room at each doorway.');
+  setWalkControlState('live', 'Recording — press New Room at each doorway, or tap a room to branch from it.');
   showRoomPrompt({ reason: 'segment' });
   renderWalkMap();
 }
@@ -1713,6 +1720,26 @@ function isCorridorName(n) {
 let walkSegments = [];
 let walkSegFtBase = 0;   // feet from completed legs inside the current segment
 let walkLastTurn = null; // direction of the most recent turn, used to pick a side
+let walkSelectedIdx = null; // room clicked on the plan to branch the next one off
+
+// Walking back out to the hall and into the next room used to guess its
+// parent, which is how rooms ended up hanging off each other. Click the space
+// you're actually standing in — the hallway, usually — and the next New Room
+// branches off that instead of off whatever you happened to walk last.
+function updateWalkBranchNote() {
+  if (!walkActive) return;
+  const seg = walkSelectedIdx === null ? null : walkSegments[walkSelectedIdx];
+  walkStartStatus.textContent = seg
+    ? `Next room branches off ${seg.name || 'that space'} — press New Room.`
+    : 'Recording — press New Room at each doorway, or tap a room to branch from it.';
+}
+
+function selectWalkSegment(i) {
+  if (!walkActive) return;
+  walkSelectedIdx = (walkSelectedIdx === i) ? null : i;
+  updateWalkBranchNote();
+  renderWalkMap();
+}
 
 function currentSegment() { return walkSegments[walkSegments.length - 1] || null; }
 
@@ -1735,6 +1762,8 @@ function beginRoomSegment(name) {
   const corridor = isCorridorName(name) || !walkSegments.length;
   let parentIdx = null;
   if (walkSegments.length) parentIdx = corridor ? walkSegments.length - 1 : nearestCorridorIndex();
+  // An explicit pick on the plan always wins over the automatic guess.
+  if (walkSelectedIdx !== null && walkSegments[walkSelectedIdx]) parentIdx = walkSelectedIdx;
   const parent = parentIdx === null ? null : walkSegments[parentIdx];
   let side = walkLastTurn === 'left' ? -1 : (walkLastTurn === 'right' ? 1 : null);
   if (side === null && parent) {
@@ -1751,6 +1780,7 @@ function beginRoomSegment(name) {
   walkSegFtBase = 0;
   walkCurrentLegFt = 0;
   walkLastTurn = null;
+  walkSelectedIdx = null;
   renderWalkMap();
 }
 
@@ -1846,20 +1876,38 @@ function buildWalkPlan() {
     baseY -= h;
   });
 
-  // Rooms stack down their side of the hall in the order they were walked,
-  // which cannot overlap by construction — no shoving required.
+  // Rooms stack down their side of the hall in the order they were walked, so
+  // siblings on a corridor can't overlap by construction.
+  const hits = (a, b) => !!b &&
+    Math.min(a.x + a.w, b.x + b.w) - Math.max(a.x, b.x) > 0.05 &&
+    Math.min(a.y + a.h, b.y + b.h) - Math.max(a.y, b.y) > 0.05;
+
   walkSegments.forEach((seg, i) => {
     if (seg.corridor) return;
     const parent = rects[seg.parentIdx] || rects[0];
-    const sideIdx = seg.side >= 0 ? 1 : 0;
+    const parentSeg = walkSegments[seg.parentIdx];
+    // Branching off another room (a closet off a bedroom) rather than off the
+    // hall: keep heading outward, away from the spine, or the child lands on
+    // top of the hallway it's supposed to sit beyond.
+    let side = seg.side >= 0 ? 1 : -1;
+    if (parentSeg && !parentSeg.corridor) side = (parent.x + parent.w / 2) < 0 ? -1 : 1;
+    const sideIdx = side >= 0 ? 1 : 0;
     let offset = 0;
     kids[seg.parentIdx].forEach((k) => {
       if (k < i && (walkSegments[k].side >= 0 ? 1 : 0) === sideIdx) offset += size[k].lenFt;
     });
     const w = size[i].widthFt, h = size[i].lenFt;
-    const y = parent.y + parent.h - offset - h;
-    const x = seg.side >= 0 ? parent.x + parent.w : parent.x - w;
-    rects[i] = { x, y, w, h };
+    const cand = {
+      x: side >= 0 ? parent.x + parent.w : parent.x - w,
+      y: parent.y + parent.h - offset - h,
+      w, h,
+    };
+    // Anything still colliding gets pushed further out, never inward.
+    for (let g = 0; g < 300 && rects.some((q, qi) => qi !== i && hits(cand, q)); g++) {
+      cand.x += side;
+    }
+    cand.side = side;
+    rects[i] = cand;
   });
 
   return walkSegments.map((seg, i) => {
@@ -1867,9 +1915,10 @@ function buildWalkPlan() {
     const parent = seg.parentIdx === null ? null : rects[seg.parentIdx];
     let door = null;
     if (parent) {
+      const sd = r.side !== undefined ? r.side : seg.side;
       door = seg.corridor
         ? { x: parent.x + parent.w / 2, y: parent.y, horizontal: true }
-        : { x: seg.side >= 0 ? parent.x + parent.w : parent.x, y: r.y + r.h / 2, horizontal: false };
+        : { x: sd >= 0 ? r.x : r.x + r.w, y: r.y + r.h / 2, horizontal: false };
     }
     return {
       node: { room: seg.name }, index: i, seg,
@@ -1914,7 +1963,8 @@ function renderWalkMap() {
 
   // Walls first, then doorway gaps punched through them, then lettering.
   rooms.forEach((r) => {
-    svg += `<rect class="wp-room${r.guessed ? ' guessed' : ''}" x="${r.x.toFixed(2)}" y="${r.y.toFixed(2)}" width="${r.w.toFixed(2)}" height="${r.h.toFixed(2)}" />`;
+    const sel = r.index === walkSelectedIdx ? ' selected' : '';
+    svg += `<rect class="wp-room${r.guessed ? ' guessed' : ''}${sel}" data-seg="${r.index}" x="${r.x.toFixed(2)}" y="${r.y.toFixed(2)}" width="${r.w.toFixed(2)}" height="${r.h.toFixed(2)}" />`;
   });
 
   // Doorways: a gap punched through the shared wall where they walked in.
@@ -1979,9 +2029,16 @@ function renderWalkMap() {
     svg += `<circle class="wp-live" cx="${last.exit.x.toFixed(2)}" cy="${last.exit.y.toFixed(2)}" r="${(fs * 0.4).toFixed(2)}" />`;
   }
 
+  walkMapSvg.classList.toggle('pickable', walkActive);
   walkMapSvg.innerHTML = svg;
   renderWalkLegend();
 }
+
+walkMapSvg.addEventListener('click', (e) => {
+  if (!walkActive) return;
+  const hit = e.target && e.target.closest ? e.target.closest('[data-seg]') : null;
+  selectWalkSegment(hit ? parseInt(hit.dataset.seg, 10) : null);
+});
 function renderWalkLegend() {
   walkLegend.innerHTML = '';
   walkNodes.forEach((node, i) => {
