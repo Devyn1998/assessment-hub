@@ -431,6 +431,30 @@ async function onWsMessage(ev) {
 
 connectWS();
 
+// Same reattach problem as the assessor side: a dropped socket clears the
+// picture-in-picture view of the assessor and nothing ever puts it back.
+function attachRemoteTracks() {
+  if (!pc) return false;
+  const tracks = pc.getReceivers().map((r) => r.track).filter((t) => t && t.readyState === 'live');
+  if (!tracks.length) return false;
+  const cur = remoteVideo.srcObject;
+  const same = cur && cur.getTracks().length === tracks.length &&
+    tracks.every((t) => cur.getTracks().includes(t));
+  if (!same) {
+    remoteVideo.srcObject = new MediaStream(tracks);
+    remoteVideo.play().catch(() => {});
+  }
+  if (pc.connectionState === 'connected') setStatus('Live', true);
+  return true;
+}
+
+setInterval(() => {
+  if (!pc || pc.connectionState !== 'connected') return;
+  const v = remoteVideo;
+  const missing = !v.srcObject || v.srcObject.getTracks().every((t) => t.readyState !== 'live');
+  if (missing) attachRemoteTracks();
+}, 3000);
+
 async function ensurePC() {
   if (pc) return;
   pc = new RTCPeerConnection({ iceServers: window.HUD_ICE_SERVERS });
@@ -440,10 +464,7 @@ async function ensurePC() {
   pc.onicecandidate = (e) => {
     if (e.candidate) wsSend({ type: 'ice-candidate', candidate: e.candidate });
   };
-  pc.ontrack = (e) => {
-    remoteVideo.srcObject = e.streams[0];
-    setStatus('Live', true);
-  };
+  pc.ontrack = () => { attachRemoteTracks(); };
   pc.onconnectionstatechange = () => {
     if (pc.connectionState === 'connected') setStatus('Live', true);
     if (['disconnected', 'failed'].includes(pc.connectionState)) {
