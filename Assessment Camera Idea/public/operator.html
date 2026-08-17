@@ -493,6 +493,15 @@
   #floorRow button { flex:0 0 auto; padding:8px 12px; font-size:11.5px; }
   #walkStartRow { display:flex; align-items:center; gap:11px; margin-bottom:11px; }
   #walkStartRow button { flex:0 0 auto; }
+  #roomEditRow { display:none; align-items:center; gap:8px; margin-bottom:11px; flex-wrap:wrap; }
+  #roomEditRow.on { display:flex; }
+  #roomEditName {
+    flex:1; min-width:110px; font-size:11px; font-weight:700; color:var(--accent-2);
+    text-transform:uppercase; letter-spacing:.07em;
+  }
+  #roomEditRow button { padding:5px 11px; font-size:11px; flex:0 0 auto; }
+  #deleteRoomBtn { color:var(--danger-2); border-color:rgba(209,73,63,.35); }
+  #deleteRoomBtn:hover:not(:disabled) { background:rgba(209,73,63,.14); }
   #walkStartRow button.live { background:var(--danger); }
   #walkStartRow button.live:hover:not(:disabled) { background:#e05a50; }
   #walkStartStatus { font-size:11px; color:var(--text-3); line-height:1.4; }
@@ -506,6 +515,9 @@
   #walkMapSvg.pickable .wp-room { cursor:pointer; }
   #walkMapSvg.pickable .wp-room:hover { fill:#182130; }
   #walkMapSvg .wp-room.selected { stroke:#2f6feb; stroke-width:.85; fill:#16243c; }
+  #walkMapSvg.pickable .wp-room { cursor:grab; }
+  #walkMapSvg.dragging .wp-room { cursor:grabbing; }
+  #walkMapSvg .wp-handle { fill:#2f6feb; stroke:#0b0d10; stroke-width:.12; cursor:nwse-resize; }
   /* Lettering and dimension lines must not swallow clicks meant for a room. */
   #walkMapSvg text, #walkMapSvg line, #walkMapSvg polyline { pointer-events:none; }
   #walkMapSvg .wp-room.guessed { fill:#0e131a; stroke:#4f5a6a; stroke-dasharray:1.1 .8; }
@@ -719,6 +731,11 @@
         <button class="secondary" id="newRoomBtn" disabled>+ New Room</button>
         <span id="walkStartStatus">Waiting for the homeowner to join…</span>
       </div>
+      <div id="roomEditRow">
+        <span id="roomEditName">No room selected</span>
+        <button class="secondary" id="resetRoomBtn">Reset size</button>
+        <button class="secondary" id="deleteRoomBtn">Delete room</button>
+      </div>
       <div id="walkMapWrap">
         <svg id="walkMapSvg" width="100%" height="360"></svg>
         <button class="secondary" id="downloadWalkMapBtn" style="width:100%;margin-top:9px;">Download Floor Plan</button>
@@ -831,6 +848,8 @@ const startWalkBtn = $('startWalkBtn');
 const newRoomBtn = $('newRoomBtn');
 const floorSelect = $('floorSelect');
 const newFloorBtn = $('newFloorBtn');
+const roomEditRow = $('roomEditRow');
+const roomEditName = $('roomEditName');
 const walkStartStatus = $('walkStartStatus');
 const downloadWalkMapBtn = $('downloadWalkMapBtn');
 const assessorSelect = $('assessorSelect');
@@ -1649,6 +1668,15 @@ function setWalkControlState(state, note) {
 newRoomBtn.addEventListener('click', onNewRoomPressed);
 floorSelect.addEventListener('change', () => setActiveFloor(parseInt(floorSelect.value, 10)));
 newFloorBtn.addEventListener('click', addFloor);
+$('deleteRoomBtn').addEventListener('click', () => {
+  if (walkSelectedIdx !== null) deleteWalkSegment(walkSelectedIdx);
+});
+$('resetRoomBtn').addEventListener('click', () => {
+  const seg = walkSelectedIdx === null ? null : walkSegments[walkSelectedIdx];
+  if (!seg) return;
+  seg.manual = null;          // back to the computed size and position
+  renderWalkMap();
+});
 
 startWalkBtn.addEventListener('click', () => {
   if (!ws) return;
@@ -1806,6 +1834,7 @@ function renderFloorSelect() {
 
 function setActiveFloor(i) {
   if (i < 0 || i >= walkFloors.length) return;
+  if (typeof updateRoomEditRow === 'function') setTimeout(updateRoomEditRow, 0);
   walkFloorIdx = i;
   walkSegments = walkFloors[i].segments;   // live reference, edits persist
   walkSegFtBase = 0;
@@ -1857,10 +1886,42 @@ function updateWalkBranchNote() {
 }
 
 function selectWalkSegment(i) {
-  if (!walkActive) return;
   walkSelectedIdx = (walkSelectedIdx === i) ? null : i;
   updateWalkBranchNote();
+  updateRoomEditRow();
   renderWalkMap();
+}
+
+function updateRoomEditRow() {
+  const seg = walkSelectedIdx === null ? null : walkSegments[walkSelectedIdx];
+  roomEditRow.classList.toggle('on', !!seg);
+  if (seg) roomEditName.textContent = seg.name || `Room ${walkSelectedIdx + 1}`;
+}
+
+// Removing a room can't just splice the array — every other segment's
+// parentIdx is a positional reference into it, so they have to be rebased or
+// the plan reparents itself at random. Children of a deleted room are adopted
+// by its parent, which is what you'd expect visually.
+function deleteWalkSegment(i) {
+  const seg = walkSegments[i];
+  if (!seg) return;
+  const parentOfDeleted = seg.parentIdx;
+  walkSegments.splice(i, 1);
+  walkSegments.forEach((sg) => {
+    if (sg.parentIdx === null) return;
+    if (sg.parentIdx === i) sg.parentIdx = (parentOfDeleted !== null && parentOfDeleted < i) ? parentOfDeleted : null;
+    else if (sg.parentIdx > i) sg.parentIdx -= 1;
+  });
+  // The first remaining segment is always the root of its floor.
+  if (walkSegments.length) {
+    walkSegments[0].parentIdx = null;
+    walkSegments.forEach((sg, k) => { if (k > 0 && (sg.parentIdx === null || sg.parentIdx >= k)) sg.parentIdx = 0; });
+  }
+  walkSelectedIdx = null;
+  updateWalkBranchNote();
+  updateRoomEditRow();
+  renderWalkMap();
+  renderWalkLegend();
 }
 
 function currentSegment() { return walkSegments[walkSegments.length - 1] || null; }
@@ -1969,10 +2030,15 @@ function buildWalkPlan() {
   if (!walkSegments.length) return [];
   const size = walkSegments.map(walkSegSize);
 
+  // A segment with no parent is a spine even if it isn't named like a
+  // corridor — deleting the hallway promotes whatever room is left to root,
+  // and it still has to be placed as one rather than hunting for a parent.
+  const isSpine = (seg) => seg.corridor || seg.parentIdx === null;
+
   // Which rooms hang off which corridor.
   const kids = walkSegments.map(() => []);
   walkSegments.forEach((seg, i) => {
-    if (seg.parentIdx !== null && !seg.corridor) kids[seg.parentIdx].push(i);
+    if (seg.parentIdx !== null && !isSpine(seg) && kids[seg.parentIdx]) kids[seg.parentIdx].push(i);
   });
 
   // A corridor only accumulates distance while you're actually walking down
@@ -1981,7 +2047,7 @@ function buildWalkPlan() {
   // always too short, and every room piles onto the same point. Grow each
   // corridor to at least fit the rooms opening off it.
   const corridorLen = walkSegments.map((seg, i) => {
-    if (!seg.corridor) return size[i].lenFt;
+    if (!isSpine(seg)) return size[i].lenFt;
     const perSide = [0, 0];
     kids[i].forEach((k) => { perSide[walkSegments[k].side >= 0 ? 1 : 0] += size[k].lenFt; });
     return Math.max(size[i].lenFt, perSide[0], perSide[1], WALK_MIN_ROOM_FT);
@@ -1992,7 +2058,7 @@ function buildWalkPlan() {
   // Corridors chain upward from the front door at the origin.
   let baseY = 0;
   walkSegments.forEach((seg, i) => {
-    if (!seg.corridor) return;
+    if (!isSpine(seg)) return;
     const w = size[i].widthFt, h = corridorLen[i];
     rects[i] = { x: -w / 2, y: baseY - h, w, h };
     baseY -= h;
@@ -2005,8 +2071,9 @@ function buildWalkPlan() {
     Math.min(a.y + a.h, b.y + b.h) - Math.max(a.y, b.y) > 0.05;
 
   walkSegments.forEach((seg, i) => {
-    if (seg.corridor) return;
-    const parent = rects[seg.parentIdx] || rects[0];
+    if (isSpine(seg)) return;
+    const parent = rects[seg.parentIdx] || rects.find(Boolean);
+    if (!parent) return;
     const parentSeg = walkSegments[seg.parentIdx];
     // Branching off another room (a closet off a bedroom) rather than off the
     // hall: keep heading outward, away from the spine, or the child lands on
@@ -2015,7 +2082,7 @@ function buildWalkPlan() {
     if (parentSeg && !parentSeg.corridor) side = (parent.x + parent.w / 2) < 0 ? -1 : 1;
     const sideIdx = side >= 0 ? 1 : 0;
     let offset = 0;
-    kids[seg.parentIdx].forEach((k) => {
+    (kids[seg.parentIdx] || []).forEach((k) => {
       if (k < i && (walkSegments[k].side >= 0 ? 1 : 0) === sideIdx) offset += size[k].lenFt;
     });
     const w = size[i].widthFt, h = size[i].lenFt;
@@ -2032,13 +2099,27 @@ function buildWalkPlan() {
     rects[i] = cand;
   });
 
+  // Anything the assessor dragged, resized or rotated by hand wins over the
+  // computed layout. Stored as an offset rather than an absolute position so
+  // the auto-layout can keep improving underneath without discarding edits.
+  walkSegments.forEach((seg, i) => {
+    const m = seg.manual;
+    if (!m || !rects[i]) return;
+    const r = rects[i];
+    if (m.swap) { const t = r.w; r.w = r.h; r.h = t; }
+    if (m.w) r.w = m.w;
+    if (m.h) r.h = m.h;
+    r.x += m.dx || 0;
+    r.y += m.dy || 0;
+  });
+
   return walkSegments.map((seg, i) => {
     const r = rects[i] || { x: 0, y: 0, w: WALK_DEFAULT_ROOM_FT, h: WALK_DEFAULT_ROOM_FT };
     const parent = seg.parentIdx === null ? null : rects[seg.parentIdx];
     let door = null;
     if (parent) {
       const sd = r.side !== undefined ? r.side : seg.side;
-      door = seg.corridor
+      door = isSpine(seg)
         ? { x: parent.x + parent.w / 2, y: parent.y, horizontal: true }
         : { x: sd >= 0 ? r.x : r.x + r.w, y: r.y + r.h / 2, horizontal: false };
     }
@@ -2073,8 +2154,12 @@ function renderWalkMap() {
   const fs = Math.max(1.1, Math.min(2.2, Math.max(vw, vh) / 26));
 
   let svg = `<defs>
-    <pattern id="wpGrid" width="2" height="2" patternUnits="userSpaceOnUse">
-      <path d="M2 0 L0 0 0 2" fill="none" stroke="#161c25" stroke-width="0.05" />
+    <pattern id="wpGridMinor" width="1" height="1" patternUnits="userSpaceOnUse">
+      <path d="M1 0 L0 0 0 1" fill="none" stroke="#1b2230" stroke-width="0.04" />
+    </pattern>
+    <pattern id="wpGrid" width="5" height="5" patternUnits="userSpaceOnUse">
+      <rect width="5" height="5" fill="url(#wpGridMinor)" />
+      <path d="M5 0 L0 0 0 5" fill="none" stroke="#2a3444" stroke-width="0.08" />
     </pattern>
     <marker id="wpArrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="3.2" markerHeight="3.2" orient="auto-start-reverse">
       <path d="M0 0 L10 5 L0 10 z" fill="#d1493f" />
@@ -2087,6 +2172,10 @@ function renderWalkMap() {
   rooms.forEach((r) => {
     const sel = r.index === walkSelectedIdx ? ' selected' : '';
     svg += `<rect class="wp-room${r.guessed ? ' guessed' : ''}${sel}" data-seg="${r.index}" x="${r.x.toFixed(2)}" y="${r.y.toFixed(2)}" width="${r.w.toFixed(2)}" height="${r.h.toFixed(2)}" />`;
+    if (sel) {
+      const g = Math.max(1.1, fs * 0.7);
+      svg += `<rect class="wp-handle" data-seg="${r.index}" data-handle="1" x="${(r.x + r.w - g / 2).toFixed(2)}" y="${(r.y + r.h - g / 2).toFixed(2)}" width="${g.toFixed(2)}" height="${g.toFixed(2)}" />`;
+    }
   });
 
   // Doorways: a gap punched through the shared wall where they walked in.
@@ -2151,15 +2240,96 @@ function renderWalkMap() {
     svg += `<circle class="wp-live" cx="${last.exit.x.toFixed(2)}" cy="${last.exit.y.toFixed(2)}" r="${(fs * 0.4).toFixed(2)}" />`;
   }
 
-  walkMapSvg.classList.toggle('pickable', walkActive);
+  walkMapSvg.classList.toggle('pickable', rooms.length > 0);
   walkMapSvg.innerHTML = svg;
   renderWalkLegend();
 }
 
-walkMapSvg.addEventListener('click', (e) => {
-  if (!walkActive) return;
+// ---------- Hand-editing the plan ----------
+// Auto-layout gets the arrangement roughly right; the assessor knows the
+// house. Rooms can be dragged, resized from the corner, and flipped between
+// portrait and landscape, all snapped to the half-foot grid underneath.
+walkMapSvg.style.touchAction = 'none';
+let planDrag = null;
+
+function svgPointFt(evt) {
+  const ctm = walkMapSvg.getScreenCTM();
+  if (!ctm) return null;
+  const pt = walkMapSvg.createSVGPoint();
+  pt.x = evt.clientX; pt.y = evt.clientY;
+  return pt.matrixTransform(ctm.inverse());
+}
+const snapFt = (v) => Math.round(v * 2) / 2;
+
+function segManual(seg) {
+  if (!seg.manual) seg.manual = { dx: 0, dy: 0, w: null, h: null, swap: false };
+  return seg.manual;
+}
+
+walkMapSvg.addEventListener('pointerdown', (e) => {
   const hit = e.target && e.target.closest ? e.target.closest('[data-seg]') : null;
-  selectWalkSegment(hit ? parseInt(hit.dataset.seg, 10) : null);
+  if (!hit) { selectWalkSegment(null); return; }
+  const idx = parseInt(hit.dataset.seg, 10);
+  const seg = walkSegments[idx];
+  if (!seg) return;
+  const p = svgPointFt(e);
+  if (!p) return;
+  if (walkSelectedIdx !== idx) selectWalkSegment(idx);
+  const plan = buildWalkPlan()[idx];
+  planDrag = {
+    idx,
+    mode: hit.dataset.handle ? 'resize' : 'move',
+    startX: p.x, startY: p.y,
+    baseDx: segManual(seg).dx || 0,
+    baseDy: segManual(seg).dy || 0,
+    baseW: plan ? plan.w : 0,
+    baseH: plan ? plan.h : 0,
+    moved: false,
+  };
+  walkMapSvg.classList.add('dragging');
+  try { walkMapSvg.setPointerCapture(e.pointerId); } catch (err) {}
+  e.preventDefault();
+});
+
+walkMapSvg.addEventListener('pointermove', (e) => {
+  if (!planDrag) return;
+  const p = svgPointFt(e);
+  if (!p) return;
+  const seg = walkSegments[planDrag.idx];
+  if (!seg) return;
+  const m = segManual(seg);
+  const dx = p.x - planDrag.startX, dy = p.y - planDrag.startY;
+  if (Math.abs(dx) > 0.25 || Math.abs(dy) > 0.25) planDrag.moved = true;
+  if (planDrag.mode === 'move') {
+    m.dx = snapFt(planDrag.baseDx + dx);
+    m.dy = snapFt(planDrag.baseDy + dy);
+  } else {
+    m.w = Math.max(3, snapFt(planDrag.baseW + dx));
+    m.h = Math.max(3, snapFt(planDrag.baseH + dy));
+  }
+  renderWalkMap();
+});
+
+function endPlanDrag(e) {
+  if (!planDrag) return;
+  planDrag = null;
+  walkMapSvg.classList.remove('dragging');
+  try { walkMapSvg.releasePointerCapture(e.pointerId); } catch (err) {}
+}
+walkMapSvg.addEventListener('pointerup', endPlanDrag);
+walkMapSvg.addEventListener('pointercancel', endPlanDrag);
+
+// Double-click flips a room between running along the hall and across it.
+walkMapSvg.addEventListener('dblclick', (e) => {
+  const hit = e.target && e.target.closest ? e.target.closest('[data-seg]') : null;
+  if (!hit) return;
+  const seg = walkSegments[parseInt(hit.dataset.seg, 10)];
+  if (!seg) return;
+  const m = segManual(seg);
+  if (m.w || m.h) { const t = m.w; m.w = m.h; m.h = t; }  // keep hand-set sizes
+  m.swap = !m.swap;
+  renderWalkMap();
+  e.preventDefault();
 });
 function renderWalkLegend() {
   walkLegend.innerHTML = '';
