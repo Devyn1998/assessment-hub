@@ -694,7 +694,6 @@ let walkAccelBaseline = null;
 let walkLastStepAt = 0;
 let walkStepsThisLeg = 0;
 let walkLastLegSendAt = 0;
-let walkPhotoTimer = null;
 const WALK_TURN_THRESHOLD_DEG = 35;
 const WALK_TURN_DEBOUNCE_MS = 900;
 const WALK_STRIDE_FT = 2.2;
@@ -746,14 +745,10 @@ function handleWalkMotion(e) {
   }
 }
 
-function scheduleWalkPhoto() {
-  clearTimeout(walkPhotoTimer);
-  walkPhotoTimer = setTimeout(() => {
-    if (!walkActive) return;
-    captureAndSendFrame('walk');
-    scheduleWalkPhoto();
-  }, 6000);
-}
+// A photo used to fire every six seconds and again on every detected turn,
+// which flooded the assessor's legend with near-identical frames of hallway
+// floor and burned bandwidth for nothing. Photos are now taken only when the
+// assessor opens a new room, so there's exactly one per room.
 
 async function startWalkthrough() {
   if (walkActive) { endWalkthrough(); return; }
@@ -770,8 +765,6 @@ async function startWalkthrough() {
   walkStepsThisLeg = 0;
   walkLastTurnAt = 0;
   wsSend({ type: 'walk-started' });
-  captureAndSendFrame('walk');
-  scheduleWalkPhoto();
 
   // Permission was already taken care of on the mood tap; this is only a
   // backstop for the case where that never happened.
@@ -791,13 +784,11 @@ function forceWalkTurn() {
   walkLegStartHeading = walkSmoothedHeading;
   walkLastTurnAt = Date.now();
   walkStepsThisLeg = 0;
-  captureAndSendFrame('walk');
 }
 
 function endWalkthrough() {
   if (!walkActive) return;
   walkActive = false;
-  clearTimeout(walkPhotoTimer);
   if (walkOrientationHandler) {
     window.removeEventListener('deviceorientationabsolute', walkOrientationHandler);
     window.removeEventListener('deviceorientation', walkOrientationHandler);
