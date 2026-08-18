@@ -1781,6 +1781,7 @@ function startWalkMap() {
   walkLastTurn = null;
   walkSelectedIdx = null;
   beginRoomSegment('');            // the space just inside the front door
+  requestRoomPhoto();
   newRoomBtn.disabled = false;
   setWalkControlState('live', 'Recording — press New Room at each doorway, or tap a room to branch from it.');
   showRoomPrompt({ reason: 'segment' });
@@ -1792,7 +1793,17 @@ function startWalkMap() {
 function onNewRoomPressed() {
   if (!walkActive) return;
   beginRoomSegment('');
+  requestRoomPhoto();
   showRoomPrompt({ reason: 'segment' });
+}
+
+// One frame per room, taken when the room is opened — enough for the AI to
+// guess the room type and to keep a visual record, without the phone firing
+// a photo every few seconds through the whole walk.
+function requestRoomPhoto() {
+  if (ws && ws.readyState === WebSocket.OPEN) {
+    ws.send(JSON.stringify({ type: 'remote-capture-photo', mode: 'walk' }));
+  }
 }
 
 function walkCurrentTip() {
@@ -1834,20 +1845,22 @@ function registerWalkTurn(direction, angle) {
 }
 
 function handleWalkPhoto(dataUrl) {
-  const node = walkPendingNode;
-  if (!node) return;
-  node.photo = dataUrl;
-  renderWalkMap();
+  const seg = currentSegment();
+  if (!seg) return;
+  seg.photo = dataUrl;
+  if (walkPendingNode) walkPendingNode.photo = dataUrl;
+  renderWalkLegend();
   getMobilenetModel().then((model) => {
     const img = new Image();
     img.onload = () => {
       model.classify(img).then((predictions) => {
         const guess = guessRoomFromPredictions(predictions);
-        if (guess && !node.room) { node.room = guess; node.roomIsGuess = true; }
-        renderWalkMap();
-        // If the picker is already open for this waypoint, fill in the guess
-        // so confirming the room is a single tap.
-        if (guess && roomPromptNode === node) showRoomPrompt({ reason: 'walk', node, guess });
+        if (guess && !seg.name) {
+          seg.nameGuess = guess;
+          // Only pre-fill the picker; never silently name a room from a guess.
+          if (roomPromptOpen() && !roomPromptSelect.value) applyRoomGuessToPrompt(guess);
+        }
+        renderWalkLegend();
       }).catch(() => {});
     };
     img.src = dataUrl;
@@ -2438,14 +2451,16 @@ walkMapSvg.addEventListener('dblclick', (e) => {
   e.preventDefault();
 });
 function renderWalkLegend() {
+  // One row per room the assessor actually opened — not one per compass turn.
+  // Turns still drive the geometry underneath; they just aren't a UI concept.
   walkLegend.innerHTML = '';
-  walkNodes.forEach((node, i) => {
+  walkSegments.forEach((seg, i) => {
     const row = document.createElement('div');
     row.className = 'walk-legend-row';
-    if (node.photo) {
+    if (seg.photo) {
       const img = document.createElement('img');
-      img.src = node.photo;
-      img.addEventListener('click', () => window.open(node.photo, '_blank'));
+      img.src = seg.photo;
+      img.addEventListener('click', () => window.open(seg.photo, '_blank'));
       row.appendChild(img);
     } else {
       const ph = document.createElement('div');
@@ -2454,24 +2469,31 @@ function renderWalkLegend() {
     }
     const body = document.createElement('div');
     body.className = 'walk-legend-body';
-    const metaBits = [];
-    if (i === 0) metaBits.push('Start');
-    else metaBits.push(`Turned ${node.turnDirection || ''}`.trim());
-    if (typeof node.legToNextFt === 'number') metaBits.push(`~${node.legToNextFt}ft to next`);
+
+    const bits = [];
+    bits.push(i === 0 ? 'Entry' : (seg.corridor ? 'Hallway' : 'Room'));
+    const dims = walkRoomDimsFt(seg.name);
+    bits.push(dims ? 'measured' : `~${Math.round(seg.ft || 0)}ft walked`);
     const meta = document.createElement('div');
     meta.className = 'walk-legend-meta';
-    meta.textContent = `${i + 1}. ${metaBits.join(' · ')}`;
+    meta.textContent = `${i + 1}. ${bits.join(' \u00b7 ')}`;
+
     const input = document.createElement('input');
     input.className = 'walk-legend-name';
     input.placeholder = 'Room name';
-    input.value = node.room || '';
-    input.addEventListener('input', () => { node.room = input.value; node.roomIsGuess = false; });
+    input.value = seg.name || '';
+    input.addEventListener('input', () => {
+      seg.name = input.value;
+      seg.corridor = isCorridorName(input.value);
+      renderWalkMap();
+    });
+
     body.appendChild(meta);
     body.appendChild(input);
-    if (node.roomIsGuess && node.room) {
+    if (!seg.name && seg.nameGuess) {
       const tag = document.createElement('div');
       tag.className = 'walk-guess-tag';
-      tag.textContent = 'AI guess — edit if wrong';
+      tag.textContent = `AI thinks: ${seg.nameGuess} — type to confirm`;
       body.appendChild(tag);
     }
     row.appendChild(body);
