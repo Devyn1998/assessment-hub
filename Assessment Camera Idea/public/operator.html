@@ -505,6 +505,15 @@
   #walkStartRow button.live { background:var(--danger); }
   #walkStartRow button.live:hover:not(:disabled) { background:#e05a50; }
   #walkStartStatus { font-size:11px; color:var(--text-3); line-height:1.4; }
+  #netStat {
+    display:none; align-items:center; gap:6px; font-size:10.5px; color:var(--text-3);
+    background:var(--panel-2); border:1px solid var(--line-soft);
+    border-radius:99px; padding:4px 11px; font-variant-numeric:tabular-nums;
+  }
+  #netStat.on { display:inline-flex; }
+  #netStat b { color:var(--text-2); font-weight:600; }
+  #netStat.poor { border-color:rgba(201,146,48,.45); color:var(--warn-2); }
+  #netStat.bad { border-color:rgba(209,73,63,.5); color:var(--danger-2); }
   #walkMapWrap {
     background:var(--panel-2); border:1px solid var(--line-soft);
     border-radius:var(--r-md); padding:11px; margin-bottom:11px;
@@ -608,6 +617,7 @@
         <div class="holo-time" id="holoTime">--:--:--</div>
         <div class="holo-date">Eastern · Session Time</div>
       </div>
+      <div id="netStat" title="Live connection quality"></div>
       <div id="moodBox">
         <span class="mood-box-label">Customer<br>Mood</span>
         <span class="mood-box-emoji" id="moodEmoji">—</span>
@@ -1119,6 +1129,39 @@ function connectWS(isRetry) {
     }
   });
 }
+
+// A running readout of what the connection is actually doing, so "it's
+// laggy" can be attributed to the network rather than guessed at. Reads the
+// same WebRTC stats the browser uses for its own congestion control.
+const netStat = $('netStat');
+let lastNetSample = null;
+setInterval(async () => {
+  if (!pc || pc.connectionState !== 'connected') { netStat.classList.remove('on'); return; }
+  let stats;
+  try { stats = await pc.getStats(); } catch (e) { return; }
+  let vid = null, aud = null;
+  stats.forEach((r) => {
+    if (r.type === 'inbound-rtp' && r.kind === 'video') vid = r;
+    if (r.type === 'inbound-rtp' && r.kind === 'audio') aud = r;
+  });
+  if (!vid) return;
+  const now = performance.now();
+  let kbps = null, fps = vid.framesPerSecond ? Math.round(vid.framesPerSecond) : null;
+  if (lastNetSample && now > lastNetSample.t) {
+    kbps = Math.round(((vid.bytesReceived - lastNetSample.bytes) * 8) / ((now - lastNetSample.t) / 1000) / 1000);
+  }
+  lastNetSample = { t: now, bytes: vid.bytesReceived };
+  const lostPct = (vid.packetsLost && vid.packetsReceived)
+    ? (vid.packetsLost / (vid.packetsLost + vid.packetsReceived)) * 100 : 0;
+  const res = (vid.frameWidth && vid.frameHeight) ? `${vid.frameWidth}\u00d7${vid.frameHeight}` : '—';
+  const audLost = (aud && aud.packetsLost && aud.packetsReceived)
+    ? (aud.packetsLost / (aud.packetsLost + aud.packetsReceived)) * 100 : 0;
+  netStat.classList.add('on');
+  netStat.classList.toggle('bad', lostPct > 5 || audLost > 3 || (fps !== null && fps < 8));
+  netStat.classList.toggle('poor', !(lostPct > 5 || audLost > 3) && (lostPct > 1.5 || (fps !== null && fps < 15)));
+  netStat.innerHTML = `<b>${res}</b> \u00b7 ${fps === null ? '—' : fps + 'fps'} \u00b7 ${kbps === null ? '—' : kbps + 'kbps'}`
+    + (lostPct > 1 ? ` \u00b7 ${lostPct.toFixed(1)}% lost` : '');
+}, 2000);
 
 // Escalating repair: ask for a fresh ICE path first (cheap, keeps the call
 // up), and only tear the whole peer connection down and rebuild if repeated
@@ -1830,11 +1873,22 @@ function walkCurrentTip() {
   };
 }
 
+// Redrawing the plan means rebuilding the whole SVG string and reparsing it.
+// Doing that on every distance ping from the phone kept the main thread busy
+// during exactly the moments the assessor needs smooth video and audio, so
+// live updates are coalesced onto animation frames instead.
+let walkRedrawQueued = false;
+function renderWalkMapSoon() {
+  if (walkRedrawQueued) return;
+  walkRedrawQueued = true;
+  requestAnimationFrame(() => { walkRedrawQueued = false; renderWalkMap(); });
+}
+
 function updateWalkLegDistance(legFt) {
   if (!walkActive) return;
   walkCurrentLegFt = legFt;
   updateCurrentSegmentFt();
-  renderWalkMap();
+  renderWalkMapSoon();
 }
 
 function registerWalkTurn(direction, angle) {
@@ -2448,7 +2502,7 @@ walkMapSvg.addEventListener('pointermove', (e) => {
     m.w = Math.max(3, snapFt(planDrag.baseW + dx));
     m.h = Math.max(3, snapFt(planDrag.baseH + dy));
   }
-  renderWalkMap();
+  renderWalkMapSoon();
 });
 
 function endPlanDrag(e) {
