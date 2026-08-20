@@ -733,6 +733,7 @@
       </div>
       <div id="roomEditRow">
         <span id="roomEditName">No room selected</span>
+        <button class="secondary" id="rotateRoomBtn">Rotate</button>
         <button class="secondary" id="resetRoomBtn">Reset size</button>
         <button class="secondary" id="deleteRoomBtn">Delete room</button>
       </div>
@@ -1491,7 +1492,9 @@ function showRoomPrompt(opts) {
   }
   if (Date.now() < roomPromptSuppressedUntil) return;
   roomPromptNode = o.node || null;
-  roomPromptSub.textContent = o.reason === 'segment'
+  roomPromptSub.textContent = o.reason === 'rename'
+    ? 'Rename this room. The plan and every measurement filed under it update together.'
+    : o.reason === 'segment'
     ? 'Name this room. Everything until you press New Room again is filed here, and it draws on the plan off the hallway.'
     : o.reason === 'walk'
     ? 'You just turned into a new space. Set it now and every photo and measurement from here files itself under this room.'
@@ -1532,6 +1535,17 @@ roomPromptSelect.addEventListener('change', () => {
 function commitRoomPrompt() {
   const val = roomPromptSelect.value === '__custom' ? roomPromptCustom.value.trim() : roomPromptSelect.value;
   if (!val) { roomPromptSelect.focus(); return; }
+  // Renaming an existing room touches only that room — it must not re-point
+  // the current room or re-file photos taken elsewhere.
+  if (roomRenameIdx !== null) {
+    const seg = walkSegments[roomRenameIdx];
+    if (seg) { seg.name = val; seg.corridor = isCorridorName(val); }
+    roomRenameIdx = null;
+    hideRoomPrompt(0);
+    renderWalkMap();
+    renderWalkLegend();
+    return;
+  }
   setCurrentRoom(val);
   const node = roomPromptNode || (walkActive ? walkPendingNode : null);
   if (node) { node.room = val; node.roomIsGuess = false; renderWalkMap(); }
@@ -1563,7 +1577,7 @@ function reassignUnassignedToCurrentRoom(room) {
 }
 
 $('roomPromptSetBtn').addEventListener('click', commitRoomPrompt);
-$('roomPromptSkipBtn').addEventListener('click', () => hideRoomPrompt(45000));
+$('roomPromptSkipBtn').addEventListener('click', () => { roomRenameIdx = null; hideRoomPrompt(45000); });
 roomPromptCustom.addEventListener('keydown', (e) => { if (e.key === 'Enter') commitRoomPrompt(); });
 roomPromptOverlay.addEventListener('click', (e) => { if (e.target === roomPromptOverlay) hideRoomPrompt(45000); });
 
@@ -1748,6 +1762,7 @@ newFloorBtn.addEventListener('click', addFloor);
 $('deleteRoomBtn').addEventListener('click', () => {
   if (walkSelectedIdx !== null) deleteWalkSegment(walkSelectedIdx);
 });
+$('rotateRoomBtn').addEventListener('click', rotateSelectedRoom);
 $('resetRoomBtn').addEventListener('click', () => {
   const seg = walkSelectedIdx === null ? null : walkSegments[walkSelectedIdx];
   if (!seg) return;
@@ -1962,6 +1977,7 @@ function addFloor() {
 let walkSegFtBase = 0;   // feet from completed legs inside the current segment
 let walkLastTurn = null; // direction of the most recent turn, used to pick a side
 let walkSelectedIdx = null; // room clicked on the plan to branch the next one off
+let roomRenameIdx = null;   // set when the picker is renaming an existing room
 
 // Walking back out to the hall and into the next room used to guess its
 // parent, which is how rooms ended up hanging off each other. Click the space
@@ -2256,7 +2272,18 @@ function renderIdleWalkPlan() {
 function renderWalkMap() {
   const rooms = buildWalkPlan();
   if (!rooms.length) { renderIdleWalkPlan(); return; }
+  const composed = composeWalkPlanSvg(rooms, false);
+  walkMapSvg.setAttribute('viewBox', composed.viewBox);
+  walkMapSvg.setAttribute('preserveAspectRatio', 'xMidYMid meet');
+  walkMapSvg.classList.toggle('pickable', true);
+  walkMapSvg.innerHTML = composed.svg;
+  renderWalkLegend();
+}
 
+// The plan is needed in two places now — on screen and inlined into the
+// exported report — so the markup is built separately from the element it
+// lands in, and the same geometry serves both.
+function composeWalkPlanSvg(rooms, forExport) {
   let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
   rooms.forEach((r) => {
     minX = Math.min(minX, r.x); minY = Math.min(minY, r.y);
@@ -2265,9 +2292,6 @@ function renderWalkMap() {
   const planW = maxX - minX, planH = maxY - minY;
   const pad = Math.max(8, Math.max(planW, planH) * 0.18);
   const vx = minX - pad, vy = minY - pad, vw = planW + pad * 2, vh = planH + pad * 2;
-  walkMapSvg.setAttribute('viewBox', `${vx.toFixed(2)} ${vy.toFixed(2)} ${vw.toFixed(2)} ${vh.toFixed(2)}`);
-  walkMapSvg.setAttribute('preserveAspectRatio', 'xMidYMid meet');
-
   // Lettering scales with the plan so it stays legible whether the walk
   // covered three rooms or thirty.
   const fs = Math.max(1.1, Math.min(2.2, Math.max(vw, vh) / 26));
@@ -2289,7 +2313,7 @@ function renderWalkMap() {
 
   // Walls first, then doorway gaps punched through them, then lettering.
   rooms.forEach((r) => {
-    const sel = r.index === walkSelectedIdx ? ' selected' : '';
+    const sel = (!forExport && r.index === walkSelectedIdx) ? ' selected' : '';
     svg += `<rect class="wp-room${r.guessed ? ' guessed' : ''}${sel}" data-seg="${r.index}" x="${r.x.toFixed(2)}" y="${r.y.toFixed(2)}" width="${r.w.toFixed(2)}" height="${r.h.toFixed(2)}" />`;
     if (sel) {
       const g = Math.max(1.1, fs * 0.7);
@@ -2359,9 +2383,7 @@ function renderWalkMap() {
     svg += `<circle class="wp-live" cx="${last.exit.x.toFixed(2)}" cy="${last.exit.y.toFixed(2)}" r="${(fs * 0.4).toFixed(2)}" />`;
   }
 
-  walkMapSvg.classList.toggle('pickable', rooms.length > 0);
-  walkMapSvg.innerHTML = svg;
-  renderWalkLegend();
+  return { viewBox: `${vx.toFixed(2)} ${vy.toFixed(2)} ${vw.toFixed(2)} ${vh.toFixed(2)}`, svg };
 }
 
 // ---------- Hand-editing the plan ----------
@@ -2438,18 +2460,39 @@ function endPlanDrag(e) {
 walkMapSvg.addEventListener('pointerup', endPlanDrag);
 walkMapSvg.addEventListener('pointercancel', endPlanDrag);
 
-// Double-click flips a room between running along the hall and across it.
+// Double-click renames the room. Rotation moved to a button, because
+// relabelling is the thing you reach for constantly during a walkthrough and
+// flipping a room's orientation is not.
 walkMapSvg.addEventListener('dblclick', (e) => {
   const hit = e.target && e.target.closest ? e.target.closest('[data-seg]') : null;
   if (!hit) return;
-  const seg = walkSegments[parseInt(hit.dataset.seg, 10)];
+  const idx = parseInt(hit.dataset.seg, 10);
+  if (!walkSegments[idx]) return;
+  selectWalkSegment(idx === walkSelectedIdx ? idx : idx); // ensure selected
+  walkSelectedIdx = idx;
+  updateRoomEditRow();
+  renderWalkMap();
+  renameWalkSegment(idx);
+  e.preventDefault();
+});
+
+// Reuses the same picker the walkthrough uses, so a rename offers the same
+// room list (and the same "Other" free-text option) as naming it the first time.
+function renameWalkSegment(idx) {
+  const seg = walkSegments[idx];
+  if (!seg) return;
+  roomRenameIdx = idx;
+  showRoomPrompt({ reason: 'rename', guess: seg.name || seg.nameGuess || '' });
+}
+
+function rotateSelectedRoom() {
+  const seg = walkSelectedIdx === null ? null : walkSegments[walkSelectedIdx];
   if (!seg) return;
   const m = segManual(seg);
   if (m.w || m.h) { const t = m.w; m.w = m.h; m.h = t; }  // keep hand-set sizes
   m.swap = !m.swap;
   renderWalkMap();
-  e.preventDefault();
-});
+}
 function renderWalkLegend() {
   // One row per room the assessor actually opened — not one per compass turn.
   // Turns still drive the geometry underneath; they just aren't a UI concept.
@@ -3003,6 +3046,56 @@ function buildAndDownloadReport() {
     `).join('')
     : '<p style="color:#999;">No measurements recorded.</p>';
 
+  // The report carried a bulleted route list but not the actual drawing, which
+  // is the one thing a customer wants to look at. Every floor's plan is now
+  // inlined as SVG — vector, so it stays sharp in print — restyled for white
+  // paper rather than the dark console.
+  const PLAN_PRINT_CSS = `
+    .wp-bg { fill:#ffffff; }
+    .wp-room { fill:#f4f6f9; stroke:#41506a; stroke-width:.5; stroke-linejoin:miter; }
+    .wp-room.guessed { fill:#fbfbfc; stroke:#9aa6b8; stroke-dasharray:1.1 .8; }
+    .wp-room-name { fill:#12181f; font-weight:700; text-anchor:middle; letter-spacing:.05em; font-family:-apple-system,system-ui,sans-serif; }
+    .wp-room-dim { fill:#2f6feb; text-anchor:middle; font-weight:600; font-family:-apple-system,system-ui,sans-serif; }
+    .wp-seq { fill:#8a94a6; text-anchor:middle; font-weight:700; font-family:-apple-system,system-ui,sans-serif; }
+    .wp-door-gap { stroke:#ffffff; stroke-linecap:butt; }
+    .wp-threshold { stroke:#2f6feb; stroke-width:.16; }
+    .wp-entry-arrow { stroke:#d1493f; stroke-width:.4; }
+    .wp-door-label { fill:#d1493f; text-anchor:middle; font-weight:700; letter-spacing:.12em; font-family:-apple-system,system-ui,sans-serif; }
+    .wp-dim { stroke:#8a94a6; stroke-width:.11; }
+    .wp-dim-text { fill:#5b6270; text-anchor:middle; font-weight:600; font-family:-apple-system,system-ui,sans-serif; }
+    .wp-live { display:none; }
+  `;
+
+  function planSectionForFloor(idx) {
+    const floor = walkFloors[idx];
+    const keepSegs = walkSegments, keepSel = walkSelectedIdx;
+    walkSegments = floor.segments;
+    walkSelectedIdx = null;
+    let rooms = [];
+    try { rooms = buildWalkPlan(); } catch (e) { rooms = []; }
+    let svgTag = '';
+    if (rooms.length) {
+      const c = composeWalkPlanSvg(rooms, true);
+      svgTag = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="${c.viewBox}" width="100%" style="max-width:640px;height:auto;border:1px solid #e2e5ea;border-radius:8px;"><style>${PLAN_PRINT_CSS}</style>${c.svg}</svg>`;
+    }
+    const rowsHtml = floor.segments.map((seg, i) => {
+      const dims = walkRoomDimsFt(seg.name);
+      const size = dims
+        ? `${ftInLabel(dims.short)} \u00d7 ${ftInLabel(dims.long)} <span style="color:#1e7a3a;">(measured)</span>`
+        : `~${Math.round(seg.ft || 0)}ft walked <span style="color:#8a7a1e;">(estimated)</span>`;
+      return `<li><strong>${escapeHtml(seg.name || 'Unnamed space')}</strong> — ${size}</li>`;
+    }).join('');
+    walkSegments = keepSegs;
+    walkSelectedIdx = keepSel;
+    if (!rooms.length && !floor.segments.length) return '';
+    return `<h3 style="font-size:13px;margin:22px 0 8px;">${escapeHtml(floor.name)}</h3>
+      ${svgTag}
+      <ul style="margin-top:10px;">${rowsHtml}</ul>`;
+  }
+
+  const floorPlansHtml = walkFloors.map((f, i) => planSectionForFloor(i)).filter(Boolean).join('')
+    || '<p style="color:#999;">No floor plan recorded.</p>';
+
   const walkRouteHtml = walkNodes.length
     ? `<ol>${walkNodes.map((n, i) => `<li>${escapeHtml(n.room || ('Waypoint ' + (i + 1)))}${i > 0 ? ` — turned ${escapeHtml(n.turnDirection || '')}` : ''}${typeof n.legToNextFt === 'number' ? `, ~${n.legToNextFt}ft to next` : ''}</li>`).join('')}</ol>`
     : '<p style="color:#999;">No walkthrough recorded.</p>';
@@ -3065,6 +3158,8 @@ function buildAndDownloadReport() {
   <ul>${checklistHtml}</ul>
   <h2>Measurements by Room</h2>
   ${roomsHtml}
+  <h2>Floor Plans</h2>
+  ${floorPlansHtml}
   <h2>Walkthrough Route</h2>
   ${walkRouteHtml}
   <h2>All Measurements (chronological)</h2>
