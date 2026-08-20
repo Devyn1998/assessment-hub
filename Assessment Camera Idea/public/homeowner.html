@@ -459,6 +459,39 @@ setInterval(() => {
   else setStatus('Live', true);
 }, 3000);
 
+// Nothing constrained the encoder before: the phone pushed 720p at whatever
+// bitrate it felt like, through a relay, over cellular. When the uplink can't
+// keep up, congestion control claws bandwidth back from everything — which is
+// why video smeared and speech broke into fragments at the same time.
+//
+// Audio is the part a person notices instantly, so it gets an explicit high
+// network priority and a small guaranteed budget. Video gets a ceiling and is
+// told to sacrifice resolution before framerate, so motion stays smooth and
+// the picture softens instead of freezing.
+async function tuneSenders() {
+  if (!pc) return;
+  for (const sender of pc.getSenders()) {
+    if (!sender.track) continue;
+    let params;
+    try { params = sender.getParameters(); } catch (e) { continue; }
+    if (!params.encodings || !params.encodings.length) params.encodings = [{}];
+    if (sender.track.kind === 'video') {
+      params.degradationPreference = 'maintain-framerate';
+      params.encodings[0].maxBitrate = 900000;   // ~0.9 Mbps ceiling
+      params.encodings[0].maxFramerate = 24;
+      params.encodings[0].networkPriority = 'low';
+      params.encodings[0].priority = 'low';
+      try { sender.track.contentHint = 'motion'; } catch (e) {}
+    } else if (sender.track.kind === 'audio') {
+      params.encodings[0].maxBitrate = 48000;
+      params.encodings[0].networkPriority = 'high';
+      params.encodings[0].priority = 'high';
+      try { sender.track.contentHint = 'speech'; } catch (e) {}
+    }
+    try { await sender.setParameters(params); } catch (e) { console.warn('sender tune failed', e); }
+  }
+}
+
 async function ensurePC() {
   if (pc) return;
   // Wait for the short-lived relay credentials before building the connection —
@@ -474,7 +507,7 @@ async function ensurePC() {
   };
   pc.ontrack = () => { attachRemoteTracks(); };
   pc.onconnectionstatechange = () => {
-    if (pc.connectionState === 'connected') setStatus('Live', true);
+    if (pc.connectionState === 'connected') { setStatus('Live', true); tuneSenders(); }
     if (['disconnected', 'failed'].includes(pc.connectionState)) {
       // The assessor drives renegotiation, but a genuinely failed connection
       // has to be torn down here or their fresh offer lands on a dead object.
@@ -517,7 +550,15 @@ async function startCamera(facing) {
   // were open near each other.
   const constraints = {
     audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
-    video: { facingMode: { ideal: facing }, width: { ideal: 1280 }, height: { ideal: 720 } }
+    // 720p over a relayed cellular uplink is more pixels than the link can
+    // carry; 960x540 at 24fps keeps detail high enough to measure from while
+    // roughly halving the encode load. WebRTC still scales down further on its
+    // own when the network demands it.
+    video: {
+      facingMode: { ideal: facing },
+      width: { ideal: 960 }, height: { ideal: 540 },
+      frameRate: { ideal: 24, max: 30 },
+    }
   };
   const stream = await navigator.mediaDevices.getUserMedia(constraints);
   localVideo.srcObject = stream;
@@ -738,7 +779,10 @@ function handleWalkMotion(e) {
   if (mag - walkAccelBaseline > 3.2 && now - walkLastStepAt > 280) {
     walkLastStepAt = now;
     walkStepsThisLeg++;
-    if (now - walkLastLegSendAt > 400) {
+    // Every one of these forces a full plan redraw on the assessor's side.
+    // Twice a second was enough to keep their main thread busy for no
+    // benefit — the plan doesn't need sub-second distance updates.
+    if (now - walkLastLegSendAt > 900) {
       walkLastLegSendAt = now;
       wsSend({ type: 'walk-leg-update', legFt: Math.round(walkStepsThisLeg * WALK_STRIDE_FT * 10) / 10 });
     }
